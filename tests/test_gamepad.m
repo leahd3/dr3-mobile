@@ -33,7 +33,9 @@ int main(void) { @autoreleasepool {
     [g.buttonB setValue:1]; publish(c,g); assert(sample().buttons & DM_BTN_A);
     [g.buttonB setValue:0]; publish(c,g); assert(sample().buttons == 0); g_face_letter = 1;
     [g.buttonA setValue:1]; [g.buttonY setValue:1]; [g.buttonX setValue:1];
-    [g.leftShoulder setValue:1]; [g.rightShoulder setValue:1];
+    [g.leftShoulder setValue:1]; publish(c,g); assert(sample().buttons == (DM_BTN_A|DM_BTN_X|DM_BTN_Y|DM_BTN_R));   // R1 = Switch R
+    [g.leftShoulder setValue:0]; [g.rightShoulder setValue:1]; publish(c,g); assert(sample().buttons == (DM_BTN_A|DM_BTN_X|DM_BTN_Y|DM_BTN_L));   // L1 = Switch L
+    [g.leftShoulder setValue:1];
     [g.leftTrigger setValue:1]; [g.rightTrigger setValue:1];
     [g.leftThumbstickButton setValue:1]; [g.rightThumbstickButton setValue:1];
     [g.buttonMenu setValue:1]; [g.buttonOptions setValue:1];
