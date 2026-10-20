@@ -47,9 +47,9 @@ static void apply(void) {
     dm_pad_set(b, ax[0], ax[1], ax[2], ax[3]);
     trace(b, ax);
 }
-// Stick: radial dead zone, then rescale to full range
+// Stick: radial dead zone (default 0.15, as in the Eden profile), then rescale to full range
 static void stick(float x, float y, int32_t *ox, int32_t *oy) {
-    if (g_dead < 0) { const char *e = getenv("DM_PAD_DEADZONE"); g_dead = e ? (float)atof(e) : 0.12f; if (!isfinite(g_dead) || g_dead < 0 || g_dead > 0.9f) g_dead = 0.12f; }
+    if (g_dead < 0) { const char *e = getenv("DM_PAD_DEADZONE"); g_dead = e ? (float)atof(e) : 0.15f; if (!isfinite(g_dead) || g_dead < 0 || g_dead > 0.9f) g_dead = 0.15f; }
     if (!isfinite(x) || !isfinite(y)) { *ox = *oy = 0; return; }
     float m = hypotf(x, y);
     if (m <= g_dead) { *ox = *oy = 0; return; }
@@ -57,7 +57,9 @@ static void stick(float x, float y, int32_t *ox, int32_t *oy) {
     *ox = (int32_t)lroundf(x * k * DM_STICK_MAX); *oy = (int32_t)lroundf(y * k * DM_STICK_MAX);
 }
 static void publish(GCController *c, GCExtendedGamepad *g) {
-    if (g_face_letter < 0) { const char *e = getenv("DM_PAD_FACE"); g_face_letter = e && !strcmp(e, "letter"); }
+    // Default follows the Eden profile this port was configured against (Cross=A, Circle=B, Square=X, Triangle=Y);
+    // DM_PAD_FACE=position restores the Switch physical layout (right=A, bottom=B, top=X, left=Y).
+    if (g_face_letter < 0) { const char *e = getenv("DM_PAD_FACE"); g_face_letter = !e || strcmp(e, "position"); }
     if (!g_active) return;
     uint64_t b = 0;
     int bot = g.buttonA.pressed, rgt = g.buttonB.pressed, lft = g.buttonX.pressed, top = g.buttonY.pressed;
@@ -83,7 +85,7 @@ static void attach(GCController *c) {
     g_count++;
     c.handlerQueue = dispatch_get_main_queue();
     LOG("Gamepad connected: %s (%s), count=%d, face=%s, deadzone=%s", c.vendorName.UTF8String ?: "?",
-        c.productCategory.UTF8String ?: "?", g_count, getenv("DM_PAD_FACE") ?: "position", getenv("DM_PAD_DEADZONE") ?: "0.12");
+        c.productCategory.UTF8String ?: "?", g_count, g_face_letter ? "letter" : "position", getenv("DM_PAD_DEADZONE") ?: "0.15");
     __weak GCController *wc = c;
     g.valueChangedHandler = ^(GCExtendedGamepad *gp, GCControllerElement *el) { (void)el; GCController *sc = wc; if (sc) publish(sc, gp); };
     publish(c, g);
@@ -114,7 +116,7 @@ void dm_gamepad_start(void (*on_present)(int present)) {
     [nc addObserverForName:GCControllerDidDisconnectNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { detach(n.object); }];
     NSArray<GCController *> *cs = GCController.controllers;
     LOG("GameController started: system controllers=%lu, face=%s, deadzone=%s", (unsigned long)cs.count,
-        getenv("DM_PAD_FACE") ?: "position", getenv("DM_PAD_DEADZONE") ?: "0.12");
+        g_face_letter ? "letter" : "position", getenv("DM_PAD_DEADZONE") ?: "0.15");
     for (GCController *c in cs) attach(c);   // attaching one calls back on_present(1)
     if (!g_count) present_changed();         // none: call back once with 0 for the current count
 }

@@ -26,15 +26,19 @@ int main(void) { @autoreleasepool {
     [[NSNotificationCenter defaultCenter] postNotificationName:GCControllerDidConnectNotification object:c]; drain();
     assert(dm_gamepad_count() == 1);
     GCExtendedGamepad *g = c.extendedGamepad;
-    [g.buttonB setValue:1]; publish(c,g); assert(sample().buttons & DM_BTN_A);
+    // Default is the Eden profile: Circle (GC buttonB) is the Switch B button.
+    [g.buttonB setValue:1]; publish(c,g); assert(sample().buttons & DM_BTN_B);
     [g.buttonB setValue:0]; publish(c,g); assert(sample().buttons == 0);
+    g_face_letter = 0;   // DM_PAD_FACE=position restores the Switch physical layout
+    [g.buttonB setValue:1]; publish(c,g); assert(sample().buttons & DM_BTN_A);
+    [g.buttonB setValue:0]; publish(c,g); assert(sample().buttons == 0); g_face_letter = 1;
     [g.buttonA setValue:1]; [g.buttonY setValue:1]; [g.buttonX setValue:1];
     [g.leftShoulder setValue:1]; [g.rightShoulder setValue:1];
     [g.leftTrigger setValue:1]; [g.rightTrigger setValue:1];
     [g.leftThumbstickButton setValue:1]; [g.rightThumbstickButton setValue:1];
     [g.buttonMenu setValue:1]; [g.buttonOptions setValue:1];
     [g.dpad setValueForXAxis:-1 yAxis:1]; publish(c,g);
-    uint64_t expected = DM_BTN_B|DM_BTN_X|DM_BTN_Y|DM_BTN_L|DM_BTN_R|DM_BTN_ZL|DM_BTN_ZR|DM_BTN_LS|DM_BTN_RS|DM_BTN_PLUS|DM_BTN_MINUS|DM_BTN_LEFT|DM_BTN_UP;
+    uint64_t expected = DM_BTN_A|DM_BTN_X|DM_BTN_Y|DM_BTN_L|DM_BTN_R|DM_BTN_ZL|DM_BTN_ZR|DM_BTN_LS|DM_BTN_RS|DM_BTN_PLUS|DM_BTN_MINUS|DM_BTN_LEFT|DM_BTN_UP;
     assert(sample().buttons == expected);
     [g.leftThumbstick setValueForXAxis:0.05 yAxis:0.04];
     [g.rightThumbstick setValueForXAxis:1 yAxis:-1]; publish(c,g);
