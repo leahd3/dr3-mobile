@@ -7,7 +7,7 @@ import shutil
 import statistics
 import subprocess
 import time
-from dr3 import WORK, env, check_modules, profile, sha, save
+from dr3 import WORK, LANG, env, check_modules, profile, sha, save
 
 
 def save_files(directory):
@@ -31,7 +31,7 @@ def main():
     directory.mkdir();shutil.copytree(original,directory/'save');(directory/'temp').mkdir()
     control=directory/'control.txt';control.write_text('1 1\n')
     settings=dict(DM_ROMFS=str(WORK/'game/RomFS'),DM_SAVE=str(directory/'save'),DM_TEMP=str(directory/'temp'),
-        DM_AOC_DIR=str(WORK/'aoc'),DM_LANG='zh-Hans',DM_OPMODE=args.opmode,DM_NVN_TBDR='0',DM_PSO_MANIFEST='off',
+        DM_AOC_DIR=str(WORK/'aoc'),DM_LANG=LANG,DM_OPMODE=args.opmode,DM_NVN_TBDR='0',DM_PSO_MANIFEST='off',
         DM_NVN_SHMAP=str(resources/'game/shader_map.tsv'),DM_MSL_DIR=str(resources/'shaders'),
         DM_NVN_UNIFORM_FORWARD='1',DM_NVN_UNIFORM_FORWARD_CONTROL=str(control),
         DM_NVN_TSV=str(directory/'performance.tsv'),DM_NVN_TSV_CALLS='0',DM_KEYS=args.keys,

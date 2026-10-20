@@ -1,8 +1,12 @@
 PY := .venv/bin/python
-.PHONY: setup bootstrap rewrite verify shaders mac app run test
+.PHONY: setup bootstrap rewrite verify shaders mac app run test env
+# --no-config: this machine's global uv config pins exclude-newer=7 days,
+# which rejects the pinned versions in requirements.txt.
 setup:
-	python3 -m venv .venv
-	$(PY) -m pip install -r requirements.txt
+	uv venv --python 3.12 .venv
+	uv pip install --no-config --python .venv/bin/python -r requirements.txt
+env:
+	nix develop
 bootstrap:
 	$(PY) tools/dr3.py bootstrap
 rewrite:

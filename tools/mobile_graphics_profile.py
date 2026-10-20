@@ -9,8 +9,10 @@ This intentional configuration requires gameplay/menu validation after packaging
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
+import shutil
 import struct
 import subprocess
 
@@ -145,7 +147,16 @@ def launch_directory(work,destination,width=DEFAULT_WIDTH,height=DEFAULT_HEIGHT)
     return destination
 
 
-def verify(original,llvm=Path('/opt/homebrew/opt/llvm/bin/llvm-mc'),width=DEFAULT_WIDTH,height=DEFAULT_HEIGHT):
+def llvm_mc():
+    configured=os.environ.get('LLVM_BIN')
+    if configured:return Path(configured)/'llvm-mc'
+    found=shutil.which('llvm-mc')
+    if found:return Path(found)
+    return Path('/opt/homebrew/opt/llvm/bin/llvm-mc')
+
+
+def verify(original,llvm=None,width=DEFAULT_WIDTH,height=DEFAULT_HEIGHT):
+    llvm=llvm or llvm_mc()
     from unicorn import Uc,UC_ARCH_ARM64,UC_MODE_ARM
     from unicorn.arm64_const import (UC_ARM64_REG_X0,UC_ARM64_REG_X30,UC_ARM64_REG_SP,UC_ARM64_REG_CPACR_EL1,
         UC_ARM64_REG_S0)

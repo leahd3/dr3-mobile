@@ -51,7 +51,7 @@ class MobileGraphicsProfile(unittest.TestCase):
             with self.assertRaises(ValueError):m.parameters(w,h)
 
     def test_independent_guest_math(self):
-        llvm=Path('/opt/homebrew/opt/llvm/bin/llvm-mc')
+        llvm=m.llvm_mc()
         if not llvm.exists():self.skipTest('LLVM unavailable')
         for width in (1280,1568,1920):
             report=m.verify(self.source(),llvm,width,720)

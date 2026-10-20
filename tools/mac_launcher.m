@@ -113,7 +113,8 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
         path_env("DM_SAVE",g_runRoot,@"save");path_env("DM_TEMP",g_runRoot,@"temp");path_env("DM_HID_RECEIPT_LOG",g_runRoot,@"controller.jsonl");
         path_env("DM_PAD_EVENT_LOG",g_runRoot,@"controller-events.jsonl");path_env("DM_NVN_TSV",g_runRoot,@"performance.tsv");
         path_env("DM_NVN_SHMAP",g_resources,@"game/shader_map.tsv");path_env("DM_MSL_DIR",g_resources,@"shaders");
-        setenv("DM_WINDOW","1",1);setenv("DM_AUDIO","1",1);setenv("DM_LANG","zh-Hans",1);setenv("DM_OPMODE","0",1);
+        // zh-Hans needs the separate zhCN DLC pack; the shipped base set is enUS.
+        setenv("DM_WINDOW","1",1);setenv("DM_AUDIO","1",1);setenv("DM_LANG","enUS",1);setenv("DM_OPMODE","0",1);
         setenv("DM_HID_RECEIPT_LIMIT","65536",1);setenv("DM_NVN_TSV_CALLS","0",1);setenv("DM_NVN_UNIFORM_FORWARD","1",1);
         setenv("DM_NVN_TBDR","0",1);setenv("DM_PSO_MANIFEST","off",1);
         setenv("MTL_HUD_ENABLED",self.hud.state==NSControlStateValueOn?"1":"0",1);

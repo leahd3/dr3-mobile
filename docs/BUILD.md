@@ -4,7 +4,7 @@ Read [GAME_FILES.md](GAME_FILES.md) first. 本教程从你已经合法准备的�
 
 ## Prerequisites / 环境
 
-Apple silicon Mac; macOS 26+; full Xcode with Metal tools (tested Xcode 27); Python 3.12+; LLVM; .NET 10; SPIRV-Cross; XcodeGen for iOS. Install and select your own Xcode/toolchains. The verifier currently expects Homebrew LLVM at `/opt/homebrew/opt/llvm/bin`. Prepare substantial free disk space: the tested base/language resource set alone is about 22.75 GB, with additional extraction, shader and build caches.
+Apple silicon Mac; macOS 26+; full Xcode with Metal tools (tested Xcode 27); Python 3.12+; LLVM; .NET 10; SPIRV-Cross; XcodeGen for iOS. Install and select your own Xcode/toolchains. LLVM is resolved from `LLVM_BIN`, then `llvm-mc` on `PATH`, and only then from Homebrew's `/opt/homebrew/opt/llvm/bin`. On a nix machine `nix develop` (see `flake.nix`) provides LLVM, .NET 10, SPIRV-Cross and Python 3.12 — it deliberately drops nix's `xcrun`/`clang` wrappers so Xcode's toolchain and the separately installed Metal compiler (`xcodebuild -downloadComponent MetalToolchain`) stay in charge. Prepare substantial free disk space: the tested base/language resource set alone is about 22.75 GB, with additional extraction, shader and build caches.
 
 ```sh
 git clone https://github.com/enginefuture/dr3-mobile.git

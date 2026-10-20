@@ -17,6 +17,8 @@ WORK = ROOT / 'work'
 TITLE = '01001B300B9BE000'
 COMMIT = '9579030e5b1f0443c12b7376559560915b6d4c4b'
 PROFILE = ROOT / 'config/diablo3-2.7.7.json'
+# zh-Hans needs the separate zhCN language DLC; only enUS ships in the pinned base set.
+LANG = 'enUS'
 SUFFIXES = ('patched.bin', 'fixups.tsv', 'gates.tsv', 'sites.tsv', 'cuts.tsv', 'obs.tsv', 'params.tsv')
 
 
@@ -35,10 +37,21 @@ def save(path, value):
 def env():
     result = {k: v for k, v in os.environ.items() if not k.startswith('DM_')}
     result.update(DM_ROOT=str(WORK), DM_GAME=TITLE, DM_RULESET='native', DM_PRIVATE_GATES='0')
-    dotnet = shutil.which('dotnet')
-    if dotnet:
-        result['DOTNET_ROOT'] = str(Path(dotnet).resolve().parent)
+    if 'DOTNET_ROOT' not in result:
+        dotnet = shutil.which('dotnet')
+        if dotnet:
+            result['DOTNET_ROOT'] = str(Path(dotnet).resolve().parent)
     return result
+
+
+def llvm_bin():
+    configured = os.environ.get('LLVM_BIN')
+    if configured:
+        return Path(configured)
+    tool = shutil.which('llvm-mc')
+    if tool:
+        return Path(tool).resolve().parent
+    return Path('/opt/homebrew/opt/llvm/bin')
 
 
 def run(command, log, extra=None, cwd=None, timeout=None):
@@ -148,7 +161,7 @@ def verify(_):
         for script, options in [('structck.py', []), ('equiv.py', ['--jobs', '4', '--seed', '1', '--mutate', '100'])]:
             log = WORK / 'logs' / f'verify-{name}-{script}.log'
             run([sys.executable, UPSTREAM / 'dm/verify' / script, WORK / 'rewrite', name,
-                 WORK / 'game/ExeFS' / name, *options], log, {'LLVM_BIN': '/opt/homebrew/opt/llvm/bin'})
+                 WORK / 'game/ExeFS' / name, *options], log, {'LLVM_BIN': str(llvm_bin())})
             results[f'{name}/{script}'] = log.read_text().splitlines()[-1]
     save(WORK / 'verification.json', {'passed': True, 'artifacts': fingerprints(), 'results': results,
          'profile_sha256': sha(PROFILE), 'limitations': ['Exclusives replaced in both Unicorn inputs; concurrency unproven.',
@@ -218,7 +231,7 @@ def launch(args):
         (WORK / 'run' / name).mkdir(exist_ok=True)
     settings = dict(DM_ROMFS=str(WORK / 'game/RomFS'), DM_SAVE=str(WORK / 'run/save'),
                     DM_TEMP=str(WORK / 'run/temp'), DM_WINDOW='1', DM_DBG='1', DM_AUDIO='1',
-                    DM_LANG='zh-Hans', DM_AOC_DIR=str(WORK / 'aoc'), MTL_HUD_ENABLED='1',
+                    DM_LANG=args.lang, DM_AOC_DIR=str(WORK / 'aoc'), MTL_HUD_ENABLED='1',
                     DM_NVN_SHMAP=str(UPSTREAM / 'dm/games' / TITLE / 'shader_map.tsv'),
                     DM_MSL_DIR=str(WORK / 'build/cache/metal_shader_cache'), DM_PSO_MANIFEST='off', DM_NVN_TBDR='0',
                     DM_NVN_UNIFORM_FORWARD='1',
@@ -272,6 +285,7 @@ def main():
     prep.add_argument('--keys', type=Path, required=True, help='Your own local keyset; never uploaded or required at runtime')
     start = commands.add_parser('run')
     start.add_argument('--seconds', type=int, default=30)
+    start.add_argument('--lang', default=LANG, help='Game UI language; zh-Hans requires the zhCN DLC pack')
     start.add_argument('--capture-shaders', action='store_true', help='Diagnostic only: missing stages may omit draws')
     start.add_argument('--keys', help='Timed diagnostic gamepad input using the upstream DM_KEYS syntax')
     start.add_argument('--inspect-frame', type=int, help='Dump actual pass bindings and render targets')
