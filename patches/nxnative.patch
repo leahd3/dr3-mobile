@@ -1829,9 +1829,17 @@ index 1a63bd7..9fcffec 100644
  
  // ---------- Host gate dispatch ----------
 diff --git a/dm/host/hle_account.c b/dm/host/hle_account.c
-index 362a6c2..61dbe98 100644
+index 362a6c2..b32be1e 100644
 --- a/dm/host/hle_account.c
 +++ b/dm/host/hle_account.c
+@@ -1,6 +1,6 @@
+ // nn::account: the real device manages users via the acc:u0 service; the host has one fixed local user.
+ // Online accounts (network service account / Nintendo Account authorization / tokens) are out of scope and uniformly return RES_FAIL; the async context's completion event fires immediately.
+-// Environment switch: DM_NICK=nickname (default Player).
++// Environment switch: DM_NICK=nickname (default Player); DM_DR3_NSA=1 spoofs a network service account (D3 only, for diagnosing the online-session bootstrap).
+ #include "hle.h"
+ 
+ typedef struct { uint64_t v[2]; } Uid;                 // nn::account::Uid, 16 bytes
 @@ -30,6 +30,13 @@ HLE_FORCE("_ZN2nn7account12PopOpenUsersEPiPNS0_10UserHandleEi", "系统代开的
  HLE_FORCE("_ZN2nn7account22TryOpenPreselectedUserEPNS0_10UserHandleE", "启动时预选用户；恒为本地用户（返回 bool）", unsigned, h_acc_TryOpenPre, UserHandle *h) {
      h->v[0] = k_uid.v[0]; h->v[1] = k_uid.v[1]; h->v[2] = HANDLE_MAGIC; return 1;
@@ -1846,6 +1854,51 @@ index 362a6c2..61dbe98 100644
  HLE_FORCE("_ZN2nn7account8OpenUserEPNS0_10UserHandleERKNS0_3UidE", "打开用户；句柄内直接存 Uid", Result, h_acc_OpenUser, UserHandle *h, const Uid *uid) {
      h->v[0] = uid->v[0]; h->v[1] = uid->v[1]; h->v[2] = HANDLE_MAGIC; return RES_OK;
  }
+@@ -46,16 +53,30 @@ HLE_FORCE("_ZN2nn7account11GetNicknameEPNS0_8NicknameERKNS0_3UidE", "用户昵
+ }
+ 
+ // ---------- Online accounts: cut ----------
+-HLE_FORCE("_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE", "网络服务账号，排除范围；剪口：恒不可用", Result, h_acc_EnsureNsa, const UserHandle *h) { (void)h; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE", "网络服务账号，排除范围；剪口", Result, h_acc_GetNsaId, void *id, const UserHandle *h) { (void)id; (void)h; return RES_FAIL; }
+-HLE_FORCE("_ZN2nn7account37LoadNetworkServiceAccountIdTokenCacheEPmPcmRKNS0_10UserHandleE", "网络服务账号令牌，排除范围；剪口", Result, h_acc_LoadTok, uint64_t *n, char *buf, uint64_t sz, const UserHandle *h) {
+-    (void)buf; (void)sz; (void)h; if (n) *n = 0; return RES_FAIL;
++// D3-only experiment: the world-load hang may be the online-session bootstrap, so this switch fakes a network service account; every other build stays fail-closed.
++#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
++static int d3_nsa(void) { const char *e = getenv("DM_DR3_NSA"); return e && atoi(e) != 0; }
++#else
++static int d3_nsa(void) { return 0; }
++#endif
++HLE_FORCE("_ZN2nn7account36EnsureNetworkServiceAccountAvailableERKNS0_10UserHandleE", "网络服务账号，排除范围；剪口：恒不可用（DM_DR3_NSA=1 时伪造成可用）", Result, h_acc_EnsureNsa, const UserHandle *h) { (void)h; return d3_nsa() ? RES_OK : RES_FAIL; }
++HLE_FORCE("_ZN2nn7account26GetNetworkServiceAccountIdEPNS0_23NetworkServiceAccountIdERKNS0_10UserHandleE", "网络服务账号，排除范围；剪口（DM_DR3_NSA=1 时给固定非零 id）", Result, h_acc_GetNsaId, void *id, const UserHandle *h) {
++    (void)h;
++    if (!d3_nsa()) { (void)id; return RES_FAIL; }
++    // Fixed non-zero id: the guest only checks that an account exists, it never compares it with a server value.
++    memset(id, 0, 16); *(uint8_t *)id = 1; return RES_OK;
++}
++HLE_FORCE("_ZN2nn7account37LoadNetworkServiceAccountIdTokenCacheEPmPcmRKNS0_10UserHandleE", "网络服务账号令牌，排除范围；剪口（DM_DR3_NSA=1 时为空令牌）", Result, h_acc_LoadTok, uint64_t *n, char *buf, uint64_t sz, const UserHandle *h) {
++    (void)h; if (n) *n = 0;
++    // Empty token, never a fabricated JWT: the host cannot mint or verify one.
++    if (!d3_nsa()) { (void)buf; (void)sz; return RES_FAIL; }
++    if (buf && sz) buf[0] = 0; return RES_OK;
+ }
+ HLE_FORCE("_ZN2nn7account40ShowLicenseRequirementsForNetworkServiceERKNS0_10UserHandleE", "联网会员提示小程序，排除范围；剪口", Result, h_acc_ShowLic, const UserHandle *h) { (void)h; return RES_FAIL; }
+ 
+ // AsyncContext / NintendoAccountAuthorizationRequestContext: object contents are read and written only by the interfaces below; construction writes no memory, the completion event fires immediately, and the result is always failure
+ HLE_FORCE("_ZN2nn7account12AsyncContextC1Ev", "异步上下文构造；宿主不建 IPC 对象", void, h_acc_AcCtor, void *self) { (void)self; }
+-HLE_FORCE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", "网络服务账号令牌，排除范围；剪口", Result, h_acc_EnsureTokAsync, void *ctx, const UserHandle *h) { (void)ctx; (void)h; return RES_FAIL; }
++HLE_FORCE("_ZN2nn7account44EnsureNetworkServiceAccountIdTokenCacheAsyncEPNS0_12AsyncContextERKNS0_10UserHandleE", "网络服务账号令牌，排除范围；剪口（DM_DR3_NSA=1 时直接成功，完成事件已立即触发）", Result, h_acc_EnsureTokAsync, void *ctx, const UserHandle *h) { (void)ctx; (void)h; return d3_nsa() ? RES_OK : RES_FAIL; }
+ HLE_FORCE("_ZN2nn7account12AsyncContext14GetSystemEventEPNS_2os11SystemEventE", "异步完成事件；立即触发", Result, h_acc_AcGetEv, void *self, void *ev) { (void)self; hle_signal_system_event(ev); return RES_OK; }
+ HLE_FORCE("_ZN2nn7account12AsyncContext9GetResultEv", "异步结果；联网已剪，恒失败", Result, h_acc_AcGetRes, void *self) { (void)self; return RES_FAIL; }
+ HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContextC1Ev", "任天堂账号授权，排除范围；构造不写内存", void, h_acc_NaCtor, void *self) { (void)self; }
+@@ -82,7 +103,7 @@ HLE_FORCE("_ZN2nn7account15ShowUserCreatorEv", "新建用户小程序；宿主
+ HLE_FORCE("_ZN2nn7account16LoadProfileImageEPmPvmRKNS0_3UidE", "用户头像；宿主没有（失败）", Result, h_acc_LoadImage, uint64_t *n, void *buf, uint64_t sz, const Uid *uid) {
+     (void)buf; (void)sz; (void)uid; if (n) *n = 0; return RES_FAIL;
+ }
+-HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "网络服务账号，排除范围；恒不可用", Result, h_acc_NsaAvail, uint8_t *out, const UserHandle *h) { (void)h; *out = 0; return RES_OK; }
++HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "网络服务账号，排除范围；恒不可用（DM_DR3_NSA=1 时为真）", Result, h_acc_NsaAvail, uint8_t *out, const UserHandle *h) { (void)h; *out = (uint8_t)d3_nsa(); return RES_OK; }
+ HLE_FORCE("_ZN2nn7account9CloseUserERKNS0_10UserHandleE", "关闭用户；句柄里没有会话", void, h_acc_CloseUser, const UserHandle *h) { (void)h; }
+ HLE_FORCE("_ZN2nn7account12AsyncContext6CancelEv", "异步上下文取消；无请求", Result, h_acc_AcCancel, void *self) { (void)self; return RES_OK; }
+ HLE_FORCE("_ZN2nn7account12AsyncContext7HasDoneEPb", "异步上下文：恒已完成", Result, h_acc_AcHasDone, void *self, uint8_t *done) { (void)self; *done = 1; return RES_OK; }
 diff --git a/dm/host/hle_audio.c b/dm/host/hle_audio.c
 index 3d309a1..ec44a2c 100644
 --- a/dm/host/hle_audio.c
@@ -2791,19 +2844,35 @@ index 0000000..d90be06
 +void dm_lan_freeaddrinfo(void*value){guest_ai*a=value;while(a){guest_ai*next=a->next;free(a);a=next;}}
 +void*dm_lan_gethostbyname(const char*host){static __thread struct {char*name;char**aliases;int type,length;char**addresses;} entry;static __thread char name[64],*aliases[1],*addresses[2];static __thread struct in_addr ip;if(!host)return NULL;if(!strcmp(host,"localhost"))ip.s_addr=htonl(INADDR_LOOPBACK);else if(inet_pton(AF_INET,host,&ip)!=1){socket_error=guest_errno(ENOENT);return NULL;}if(!dm_lan_peer_allowed(ip.s_addr,0)){socket_error=guest_errno(EACCES);return NULL;}snprintf(name,sizeof(name),"%s",host);aliases[0]=NULL;addresses[0]=(char*)&ip;addresses[1]=NULL;entry.name=name;entry.aliases=aliases;entry.type=AF_INET;entry.length=4;entry.addresses=addresses;return &entry;}
 diff --git a/dm/host/hle_misc.c b/dm/host/hle_misc.c
-index 5f86515..ea4cf72 100644
+index 5f86515..b837763 100644
 --- a/dm/host/hle_misc.c
 +++ b/dm/host/hle_misc.c
-@@ -91,6 +91,9 @@ HLE_FORCE("_ZN2nn3ngc15ProfanityFilter19CheckProfanityWordsEPjjPPKcm", "敏感
+@@ -88,13 +88,23 @@ HLE_FORCE("_ZN2nn3ngc15ProfanityFilter19CheckProfanityWordsEPjjPPKcm", "敏感
+ }
+ 
+ // ---------- nsd server name resolution / pctl free communication: networking, out of scope ----------
++// D3-only experiment: the world-load hang may be the online bootstrap; DM_DR3_PCTL=1 reports the parental-control free-communication permission as granted.
++// Every other build keeps the offline policy (0) at compile time.
++#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
++static int d3_pctl(void) { const char *e = getenv("DM_DR3_PCTL"); return e && atoi(e) != 0; }
++#else
++static int d3_pctl(void) { return 0; }
++#endif
  HLE_FORCE("_ZN2nn3nsd7ResolveEPNS0_4FqdnERKS1_", "服务器名解析，联网排除；剪口", Result, h_nsd_Resolve, void *out, const void *in) { (void)out; (void)in; return RES_FAIL; }
  HLE_FORCE("_ZN2nn3nsd9ResolveExEPNS0_4FqdnERKS1_", "服务器名解析，联网排除；剪口", Result, h_nsd_ResolveEx, void *out, const void *in) { (void)out; (void)in; return RES_FAIL; }
  // bool arguments only look at the low 8 bits; returns bool
+-HLE_FORCE("_ZN2nn4pctl25TryBeginFreeCommunicationEb", "家长控制·与他人通信，联网排除；恒不允许", unsigned, h_pctl_TryBegin, unsigned show_ui) { (void)show_ui; return 0; }
 +// SDK 8 / D3 calls this query before its network startup (sdk+0x33a620).
 +// Match the host's existing offline communication policy; the result is bool.
-+HLE_FORCE("_ZN2nn4pctl32CheckFreeCommunicationPermissionEb", "Offline communication permission query", unsigned, h_pctl_CheckFree, unsigned show_ui) { (void)show_ui; return 0; }
- HLE_FORCE("_ZN2nn4pctl25TryBeginFreeCommunicationEb", "家长控制·与他人通信，联网排除；恒不允许", unsigned, h_pctl_TryBegin, unsigned show_ui) { (void)show_ui; return 0; }
++HLE_FORCE("_ZN2nn4pctl32CheckFreeCommunicationPermissionEb", "Offline communication permission query", unsigned, h_pctl_CheckFree, unsigned show_ui) { (void)show_ui; return d3_pctl() ? 1u : 0u; }
++HLE_FORCE("_ZN2nn4pctl25TryBeginFreeCommunicationEb", "家长控制·与他人通信，联网排除；恒不允许", unsigned, h_pctl_TryBegin, unsigned show_ui) { (void)show_ui; return d3_pctl() ? 1u : 0u; }
  HLE_FORCE("_ZN2nn4pctl20EndFreeCommunicationEv", "家长控制·与他人通信", void, h_pctl_End, void) {}
  // Engage asks on entering a battle map (no UI); without this the SDK connects to the pctl service through sm, which the host does not have, and aborts
+-HLE_FORCE("_ZN2nn4pctl28IsFreeCommunicationAvailableEv", "家长控制·与他人通信可用否，联网排除；恒否", unsigned, h_pctl_IsFree, void) { return 0; }
++HLE_FORCE("_ZN2nn4pctl28IsFreeCommunicationAvailableEv", "家长控制·与他人通信可用否，联网排除；恒否", unsigned, h_pctl_IsFree, void) { return d3_pctl() ? 1u : 0u; }
+ // The Legend of Zelda: Breath of the Wild: checks the parental-control permission for stereoscopic 3D before VR-related screens (returns bool; the argument = whether to show UI, the game passes 0). The host has no parental controls: permitted
+ HLE_FORCE("_ZN2nn4pctl27CheckStereoVisionPermissionEb", "家长控制·3D 立体显示许可；宿主无家长控制，允许", unsigned, h_pctl_Stereo, unsigned show_ui) { (void)show_ui; return 1; }
+ 
 diff --git a/dm/host/hle_net.c b/dm/host/hle_net.c
 index 234d762..672dfa6 100644
 --- a/dm/host/hle_net.c
@@ -3092,10 +3161,30 @@ index e237a24..2fe8d62 100644
      int front = m->patch_off < 0;
      if (z0 + zw != (front ? m->file_image_len : (uint64_t)m->patch_off) || (z0 & 0x3FFF) || (zw & 0x3FFF) || (z1 & 0x3FFF) || ((uintptr_t)x0 & 0x3FFF) || ((uintptr_t)w & 0x3FFF) || ((uintptr_t)x1 & 0x3FFF))
 diff --git a/dm/tools/patch_nso.py b/dm/tools/patch_nso.py
-index 837700c..4cb657c 100644
+index 837700c..bdc2849 100644
 --- a/dm/tools/patch_nso.py
 +++ b/dm/tools/patch_nso.py
-@@ -680,7 +680,12 @@ for a in sorted(kinds):
+@@ -46,6 +46,19 @@ else:
+ # Networking cuts (excluded scope: Battle.net / online play): taken from a community offline fix (LFS Mod Offline Fix for v2228224, which differs from the official 94012 main in only these 7 words).
+ # Measured: the system service layer (nifm offline / DNS black hole / account service) cannot get around it: the game itself sends Battle.net requests directly and allows offline play according to the "last online" time.
+ CUTS = {
++  # Diablo III 2.7.7 (main 2607a74f): the always-on part of d3hack v3.1's dynamic-seasonal set (its table is
++  # pinned to 2.7.6.90885). Offsets carried over with dm/tools/nso_fnmap.py and each site re-checked against
++  # 2.7.7. Season number 37 = the account's last online season.
++  # Sites 01/02 (XVar season number/state) are NOT patchable this way: at 0x72eea0 x1 is a pointer, not the
++  # value (patching it crashed at 0xa272f4 dereferencing 37+0x18); the game already passes 37 there. d3hack site 10
++  # (the spawn gate) is deliberately NOT applied: arming it unconditionally made non-seasonal heroes hang.
++  '2607a74f5df7754cc0357b5df7e49693': [
++    (0x351ccc, '81010054', '21008052', 'd3hack dynamic_seasonal_03：bSeasonConfirmedAvailable 的 b.ne → movz w1,#1，函数体总是带「已确认」执行'),
++    (0x5ff0c, '00010012', '20008052', 'd3hack dynamic_seasonal_04：IsSeasonsInitialized 的 and w0,w8,#1 → movz w0,#1，恒为真'),
++    (0x1bd140, '159140b9', 'b5048052', 'd3hack dynamic_seasonal_05：season_created 的 ldr w21,[x8,#0x90] → movz w21,#37'),
++    (0x1bf5f0, 'ff0304d1', '00008052', 'd3hack dynamic_seasonal_08：ValidateHeroForPartyMember 的 sub sp,sp,#0x100 → movz w0,#0，返回 error_none'),
++    (0x1bf5f4, 'f76300f9', 'c0035fd6', 'd3hack dynamic_seasonal_09：紧随其后的 str x23,[sp,#0xc0] → ret，跳过函数体'),
++  ],
+   # Super Mario Bros. Wonder v0 main
+   'cd6e42aee7934f4d8393cd43893ae25e': [
+     # Resource heap slack: each resource unit's ExpHeap is created with the resource size table value + 0x1008 (main+0x1e603c → ExpHeap::create main+0x4aac38); the table holds Nintendo's measured peaks with almost no margin
+@@ -680,7 +693,12 @@ for a in sorted(kinds):
      elif k in ('cntpct', 'cntvct'): st = site_gate(ins, k, arg); stat(k)
      elif k == 'ctr':   # replaced in place by a constant: DminLine = 4 (64-byte lines); movz xN, #4, lsl #16
          assert arg != 18, f'{a:x} mrs x18, ctr_el0'
