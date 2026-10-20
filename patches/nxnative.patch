@@ -1578,7 +1578,7 @@ index d21874c..926334d 100644
      printf("== %d 项，失败 %d ==\n", g_n, g_fail);
      return g_fail != 0;
 diff --git a/dm/gfx/tools/dmsh_chain.lock b/dm/gfx/tools/dmsh_chain.lock
-index c925370..05aa879 100644
+index c925370..4dc5154 100644
 --- a/dm/gfx/tools/dmsh_chain.lock
 +++ b/dm/gfx/tools/dmsh_chain.lock
 @@ -3,6 +3,6 @@ dmsh_xlate.dll	6dd3441c31b57475
@@ -1586,7 +1586,7 @@ index c925370..05aa879 100644
  Ryujinx.Common.dll	74f785bc3a81386e
  xlate_source	23b85cb2e58b9c36
 -spirv-cross	d9dc197f061b42a5
-+spirv-cross	242d2c694be3ec91
++spirv-cross	00f1a6a7e06b5523
  metal_macosx	Apple metal version 32023.921 (metalfe-32023.921.6)
  metal_iphoneos	Apple metal version 32023.921 (metalfe-32023.921.6)
 diff --git a/dm/host/Makefile b/dm/host/Makefile
@@ -1672,7 +1672,7 @@ index 933c85b..6dfad7a 100644
 +void dm_pad_clear(void);
 +void dm_input_clear(void);
 diff --git a/dm/host/front_mac.m b/dm/host/front_mac.m
-index c7559ca..1cbe064 100644
+index c7559ca..cb5a160 100644
 --- a/dm/host/front_mac.m
 +++ b/dm/host/front_mac.m
 @@ -3,6 +3,7 @@
@@ -1683,7 +1683,7 @@ index c7559ca..1cbe064 100644
  #import <Metal/Metal.h>
  #include "dm.h"
  #include "dm_input.h"
-@@ -13,14 +14,45 @@ __attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn
+@@ -13,14 +14,58 @@ __attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn
  #include "front.h"
  #include "hle.h"
  #include <signal.h>
@@ -1692,8 +1692,21 @@ index c7559ca..1cbe064 100644
 +void dm_gamepad_start(void (*on_present)(int));
 +void dm_gamepad_set_active(int active);
 +static __weak NSWindow *g_window;
++static int lang_zh(void) { const char *e = getenv("DM_LANG"); return e && (e[0] | 0x20) == 'z' && (e[1] | 0x20) == 'h'; }
 +static void pad_status(int present) {
-+    g_window.title = [NSString stringWithFormat:@"%s · %@", DM_GAME_NAME, present ? @"手柄已连接" : @"等待手柄（键盘可用）"];
++    g_window.title = [NSString stringWithFormat:@"%s · %@", DM_GAME_NAME, lang_zh() ? (present ? @"手柄已连接" : @"等待手柄（键盘可用）")
++                                                                                   : (present ? @"Controller connected" : @"Waiting for controller (keyboard works)")];
++}
++static void install_main_menu(void) {
++    NSString *name = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
++    if (!name.length) name = NSProcessInfo.processInfo.processName;
++    NSMenu *main = [NSMenu new], *app = [[NSMenu alloc] initWithTitle:name];
++    NSMenuItem *item = [[NSMenuItem alloc] init];
++    item.title = name; item.submenu = app; [main addItem:item];
++    [app addItemWithTitle:[NSString stringWithFormat:@"Hide %@", name] action:@selector(hide:) keyEquivalent:@"h"];
++    [app addItem:NSMenuItem.separatorItem];
++    [app addItemWithTitle:[NSString stringWithFormat:@"Quit %@", name] action:@selector(terminate:) keyEquivalent:@"q"];
++    NSApp.mainMenu = main;
 +}
  static CAMetalLayer *g_layer;
  static uint64_t g_btn;
@@ -1729,7 +1742,7 @@ index c7559ca..1cbe064 100644
      unsigned w, h; const char *e = getenv("DM_GAME_RES");
      if (e && sscanf(e, "%ux%u", &w, &h) == 2) return docked ? (uint64_t)h << 32 | w : (uint64_t)(h * 4 / 5) << 32 | (w * 4 / 5 + 3) / 4 * 4;
      return docked ? 900ull << 32 | 1600 : 720ull << 32 | 1280;
-@@ -60,18 +92,27 @@ void front_run(void (*guest)(void)) {
+@@ -60,23 +105,33 @@ void front_run(void (*guest)(void)) {
      @autoreleasepool {
          [NSApplication sharedApplication];
          [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -1760,7 +1773,13 @@ index c7559ca..1cbe064 100644
          [win center];
          [win makeKeyAndOrderFront:nil];
          [NSApp activateIgnoringOtherApps:YES];
-@@ -93,10 +134,10 @@ void front_run(void (*guest)(void)) {
+         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
+             if (e.window != win) return e;   // Only swallow keys for the game window; other windows such as the software keyboard input box receive typing as usual
++            if (e.modifierFlags & NSEventModifierFlagCommand) return e;   // Let Command key equivalents reach the menu (Cmd+Q / Cmd+W); the game key map has no Command bindings
+             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
+             return nil;   // Swallow it to avoid the system beep
+         }];
+@@ -93,14 +148,15 @@ void front_run(void (*guest)(void)) {
                                                        usingBlock:^(NSNotification *n) { (void)n; exit(0); }];
          // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1)
          NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -1775,6 +1794,11 @@ index c7559ca..1cbe064 100644
          // Guest thread: 64 MiB stack (the Switch main thread stack is specified by npdm; the host gives plenty)
          static guest_arg ga; ga.fn = guest;
          pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 64u << 20);
+         pthread_t th; if (pthread_create(&th, &a, guest_tramp, &ga)) die("pthread_create guest");
++        install_main_menu();
+         [NSApp run];
+     }
+ }
 diff --git a/dm/host/hle.c b/dm/host/hle.c
 index 1a63bd7..9fcffec 100644
 --- a/dm/host/hle.c

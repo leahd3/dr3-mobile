@@ -4,12 +4,45 @@ import argparse
 import json
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import time
 from dr3 import ROOT, WORK, UPSTREAM, TITLE, PROFILE, sha, check_modules, fingerprints, native_fingerprints, check_shaders, save
 from app_icons import mac_icns
 from mobile_graphics_profile import launch_directory, verify
+
+LANGUAGES = ('en', 'zh-Hans')
+
+
+def strings_keys(path):
+    keys = {}
+    for number, line in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
+        text = line.strip()
+        if not text or text.startswith('/*') or text.startswith('//'):
+            continue
+        match = re.fullmatch(r'"((?:[^"\\]|\\.)*)"\s*=\s*"((?:[^"\\]|\\.)*)"\s*;', text)
+        if not match:
+            raise ValueError(f'{path}:{number}: malformed localization entry')
+        key, value = match.groups()
+        if not value:
+            raise ValueError(f'{path}:{number}: empty value for {key!r}')
+        keys[key] = value
+    return keys
+
+
+def check_localizations():
+    files = {}
+    for language in LANGUAGES:
+        path = ROOT / 'tools/mac-i18n' / f'{language}.lproj' / 'Localizable.strings'
+        if not path.is_file():
+            raise ValueError(f'Missing localization file: {path}')
+        files[language] = strings_keys(path)
+    if files['en'].keys() != files['zh-Hans'].keys():
+        missing = sorted(files['en'].keys() - files['zh-Hans'].keys())
+        extra = sorted(files['zh-Hans'].keys() - files['en'].keys())
+        raise ValueError(f'Localization key sets differ; absent from zh-Hans: {missing}; absent from en: {extra}')
+    return files
 
 
 def main():
@@ -20,6 +53,7 @@ def main():
     if args.test_session:
         args.test_session=args.test_session.resolve(strict=True)
         if not (args.test_session/'save/account.dat').is_file():raise ValueError('Test session requires an existing save copy')
+    localizations = check_localizations()
     check_modules()
     verification = json.loads((WORK / 'verification.json').read_text())
     if not verification['passed'] or verification['artifacts'] != fingerprints() or verification['profile_sha256'] != sha(PROFILE):
@@ -43,6 +77,8 @@ def main():
     resources = stage / 'Contents/Resources'
     mac.mkdir(parents=True)
     resources.mkdir()
+    for language in localizations:
+        shutil.copytree(ROOT / 'tools/mac-i18n' / f'{language}.lproj', resources / f'{language}.lproj')
     mac_icns(WORK/'game/icon.jpg',resources/'AppIcon.icns',WORK/'build/app-icons')
     shutil.copy2(host, mac / 'dmhost')
     shutil.copytree(WORK / 'rewrite', resources / 'rewrite', ignore=shutil.ignore_patterns('*.log', '*.orig.bin'))
@@ -57,6 +93,7 @@ def main():
                     ignore=shutil.ignore_patterns('*.metal', '*.air', '*.spv'))
     info = {'CFBundleName': 'DR3 Mobile', 'CFBundleDisplayName': 'DR3 Mobile',
             'CFBundleIdentifier': 'com.enginefuture.dr3-mobile', 'CFBundleExecutable': 'DR3Mobile',
+            'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'zh-Hans'],
             'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': '0.1.0', 'CFBundleIconFile': 'AppIcon.icns',
             'CFBundleVersion': '3', 'NSLocalNetworkUsageDescription': '用于发现并加入同一 Wi-Fi 内的暗黑破坏神 III 游戏。',
             'NSBonjourServices': ['_dr3lan._udp'], 'LSMinimumSystemVersion': '26.0', 'NSHighResolutionCapable': True}

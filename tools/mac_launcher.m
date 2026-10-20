@@ -38,6 +38,7 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
 @property(strong) NSWindow *window;
 @property(strong) NSSegmentedControl *mode;
 @property(strong) NSButton *hud,*fx,*lan,*play;
+@property(strong) NSPopUpButton *language;
 @property(strong) NSTextField *displayNote,*graphicsNote;
 @property BOOL starting;
 @end
@@ -51,33 +52,42 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
     (void)note;
     NSMenu *menu=[NSMenu new];NSMenuItem *applicationItem=[NSMenuItem new];[menu addItem:applicationItem];
     NSMenu *applicationMenu=[[NSMenu alloc] initWithTitle:@"DR3 Mobile"];
-    NSMenuItem *quit=[[NSMenuItem alloc] initWithTitle:@"退出 DR3 Mobile" action:@selector(terminate:) keyEquivalent:@"q"];
+    NSMenuItem *quit=[[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"menu.quit",nil) action:@selector(terminate:) keyEquivalent:@"q"];
     quit.target=NSApp;[applicationMenu addItem:quit];applicationItem.submenu=applicationMenu;NSApp.mainMenu=menu;
-    [NSUserDefaults.standardUserDefaults registerDefaults:@{@"LaunchWide":@NO,@"LaunchMetalHUD":@YES,@"LaunchMetalFX":@YES,@"LaunchLocalLAN":@YES}];
-    self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,760,470)
+    [NSUserDefaults.standardUserDefaults registerDefaults:@{@"LaunchWide":@NO,@"LaunchMetalHUD":@YES,@"LaunchMetalFX":@YES,@"LaunchLocalLAN":@YES,@"LaunchLanguage":@"system"}];
+    self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,760,610)
         styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
-    self.window.title=@"DR3 Mobile · 启动设置";self.window.delegate=self;self.window.contentMinSize=NSMakeSize(700,450);
+    self.window.title=NSLocalizedString(@"window.title",nil);self.window.delegate=self;self.window.contentMinSize=NSMakeSize(700,580);
     NSImageView *icon=[NSImageView imageViewWithImage:[[NSImage alloc] initWithContentsOfFile:[g_resources stringByAppendingPathComponent:@"AppIcon.icns"]]];
     [icon.widthAnchor constraintEqualToConstant:96].active=YES;[icon.heightAnchor constraintEqualToConstant:96].active=YES;
     NSTextField *title=label(@"DR3 Mobile",28,NO);title.font=[NSFont systemFontOfSize:28 weight:NSFontWeightSemibold];
-    self.play=[NSButton buttonWithTitle:@"开始游戏" target:self action:@selector(start:)];self.play.bezelStyle=NSBezelStyleRounded;
+    self.play=[NSButton buttonWithTitle:NSLocalizedString(@"button.play",nil) target:self action:@selector(start:)];self.play.bezelStyle=NSBezelStyleRounded;
     self.play.controlSize=NSControlSizeLarge;self.play.keyEquivalent=@"\r";self.play.identifier=@"start-game";
     [self.play.widthAnchor constraintGreaterThanOrEqualToConstant:190].active=YES;
-    NSStackView *left=column(@[icon,title,label(@"暗黑破坏神 III · 永恒之战版",12,YES),self.play,
-        label(@"设置会自动保存，下次打开可重新选择。",12,YES),
-        label(g_testSession?@"存档：联机测试副本":@"存档：本机游戏进度",12,YES)],16);
-    self.mode=[NSSegmentedControl segmentedControlWithLabels:@[@"正常 16:9",@"宽屏"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
+    NSStackView *left=column(@[icon,title,label(NSLocalizedString(@"subtitle",nil),12,YES),self.play,
+        label(NSLocalizedString(@"note.autosave",nil),12,YES),
+        label(g_testSession?NSLocalizedString(@"save.test",nil):NSLocalizedString(@"save.local",nil),12,YES)],16);
+    self.mode=[NSSegmentedControl segmentedControlWithLabels:@[NSLocalizedString(@"mode.normal",nil),NSLocalizedString(@"mode.wide",nil)] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
     self.mode.selectedSegment=[NSUserDefaults.standardUserDefaults boolForKey:@"LaunchWide"]?1:0;self.mode.identifier=@"display-mode";
     [self.mode setEnabled:[NSFileManager.defaultManager fileExistsAtPath:[g_resources stringByAppendingPathComponent:@"rewrite-wide/main.patched.bin"]] forSegment:1];
     if(![self.mode isEnabledForSegment:1])self.mode.selectedSegment=0;
     self.displayNote=label(@"",12,YES);self.graphicsNote=label(@"",12,YES);
-    self.hud=[self toggle:@"Metal HUD" key:@"LaunchMetalHUD"];
-    self.fx=[self toggle:@"MetalFX 超分" key:@"LaunchMetalFX"];
-    self.lan=[self toggle:@"本地 Wi-Fi 联机" key:@"LaunchLocalLAN"];
-    NSStackView *right=column(@[section(@"画面模式",@[self.mode,self.displayNote]),
-        section(@"图形选项",@[self.hud,self.fx,self.graphicsNote]),
-        section(@"局域网",@[self.lan,label(@"两台设备连接同一 Wi-Fi，在游戏内创建或加入本地游戏。",12,YES)])],14);
+    self.hud=[self toggle:NSLocalizedString(@"toggle.hud",nil) key:@"LaunchMetalHUD"];
+    self.fx=[self toggle:NSLocalizedString(@"toggle.metalfx",nil) key:@"LaunchMetalFX"];
+    self.lan=[self toggle:NSLocalizedString(@"toggle.lan",nil) key:@"LaunchLocalLAN"];
+    self.language=[NSPopUpButton new];
+    // NSMenuItem tags are integers, so each Switch language tag lives in representedObject.
+    [self.language addItemWithTitle:NSLocalizedString(@"lang.system",nil)];self.language.lastItem.representedObject=@"system";
+    [self.language addItemWithTitle:NSLocalizedString(@"lang.en",nil)];self.language.lastItem.representedObject=@"en-US";
+    [self.language addItemWithTitle:NSLocalizedString(@"lang.zh",nil)];self.language.lastItem.representedObject=@"zh-Hans";
+    self.language.identifier=@"LaunchLanguage";self.language.target=self;self.language.action=@selector(changed:);
+    NSString *language=[NSUserDefaults.standardUserDefaults stringForKey:@"LaunchLanguage"];
+    for(NSMenuItem *item in self.language.itemArray)if([item.representedObject isEqual:language])[self.language selectItem:item];
+    NSStackView *right=column(@[section(NSLocalizedString(@"section.display",nil),@[self.mode,self.displayNote]),
+        section(NSLocalizedString(@"section.graphics",nil),@[self.hud,self.fx,self.graphicsNote]),
+        section(NSLocalizedString(@"section.lan",nil),@[self.lan,label(NSLocalizedString(@"note.lan",nil),12,YES)]),
+        section(NSLocalizedString(@"section.language",nil),@[self.language,label(NSLocalizedString(@"note.language",nil),12,YES)])],14);
     for(NSView *v in right.arrangedSubviews)[v.widthAnchor constraintEqualToAnchor:right.widthAnchor].active=YES;
     NSStackView *content=[NSStackView stackViewWithViews:@[left,right]];content.orientation=NSUserInterfaceLayoutOrientationHorizontal;
     content.alignment=NSLayoutAttributeTop;content.distribution=NSStackViewDistributionFill;content.spacing=30;content.translatesAutoresizingMaskIntoConstraints=NO;
@@ -94,8 +104,9 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
     (void)sender;NSUserDefaults *d=NSUserDefaults.standardUserDefaults;
     [d setBool:self.mode.selectedSegment==1 forKey:@"LaunchWide"];
     for(NSButton *b in @[self.hud,self.fx,self.lan])[d setBool:b.state==NSControlStateValueOn forKey:b.identifier];
-    self.displayNote.stringValue=self.mode.selectedSegment==1?@"1568×720，扩大左右视野；窗口保持画面比例。":@"1280×720，保留原版 16:9 视野。";
-    self.graphicsNote.stringValue=self.fx.state==NSControlStateValueOn?@"720p 渲染，MetalFX 超分至 2K；HUD 显示帧率与 GPU 数据。":@"720p 渲染，直接适配窗口；HUD 显示帧率与 GPU 数据。";
+    [d setObject:self.language.selectedItem.representedObject forKey:@"LaunchLanguage"];
+    self.displayNote.stringValue=self.mode.selectedSegment==1?NSLocalizedString(@"note.display.wide",nil):NSLocalizedString(@"note.display.normal",nil);
+    self.graphicsNote.stringValue=self.fx.state==NSControlStateValueOn?NSLocalizedString(@"note.graphics.fx",nil):NSLocalizedString(@"note.graphics.direct",nil);
 }
 - (void)start:(id)sender {
     (void)sender;if(self.starting)return;self.starting=YES;self.play.enabled=NO;
@@ -113,19 +124,22 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
         path_env("DM_SAVE",g_runRoot,@"save");path_env("DM_TEMP",g_runRoot,@"temp");path_env("DM_HID_RECEIPT_LOG",g_runRoot,@"controller.jsonl");
         path_env("DM_PAD_EVENT_LOG",g_runRoot,@"controller-events.jsonl");path_env("DM_NVN_TSV",g_runRoot,@"performance.tsv");
         path_env("DM_NVN_SHMAP",g_resources,@"game/shader_map.tsv");path_env("DM_MSL_DIR",g_resources,@"shaders");
-        // zh-Hans needs the separate zhCN DLC pack; the shipped base set is enUS.
-        setenv("DM_WINDOW","1",1);setenv("DM_AUDIO","1",1);setenv("DM_LANG","enUS",1);setenv("DM_OPMODE","0",1);
+        // DM_LANG seeds new profiles; an existing save's Settings.json Language wins.
+        NSString *language=self.language.selectedItem.representedObject;
+        if([language isEqualToString:@"system"])language=NSLocale.preferredLanguages.firstObject?:@"en-US";
+        language=[language.lowercaseString hasPrefix:@"zh"]?@"zh-Hans":@"en-US";
+        setenv("DM_WINDOW","1",1);setenv("DM_AUDIO","1",1);setenv("DM_LANG",language.UTF8String,1);setenv("DM_OPMODE","0",1);
         setenv("DM_HID_RECEIPT_LIMIT","65536",1);setenv("DM_NVN_TSV_CALLS","0",1);setenv("DM_NVN_UNIFORM_FORWARD","1",1);
         setenv("DM_NVN_TBDR","0",1);setenv("DM_PSO_MANIFEST","off",1);
         setenv("MTL_HUD_ENABLED",self.hud.state==NSControlStateValueOn?"1":"0",1);
         setenv("DM_METALFX",fx?"spatial":"off",1);setenv("DM_MAC_DISPLAY_MODE",wide?"wide":"normal",1);
         setenv("DM_DR3_LAN",self.lan.state==NSControlStateValueOn?"1":"0",1);
         [NSUserDefaults.standardUserDefaults synchronize];
-        fprintf(stderr,"launch: mode=%s HUD=%s MetalFX=%s LAN=%s save=%s\n",wide?"wide":"normal",getenv("MTL_HUD_ENABLED"),getenv("DM_METALFX"),getenv("DM_DR3_LAN"),g_testSession?"test-copy":"local");
+        fprintf(stderr,"launch: mode=%s HUD=%s MetalFX=%s LAN=%s lang=%s save=%s\n",wide?"wide":"normal",getenv("MTL_HUD_ENABLED"),getenv("DM_METALFX"),getenv("DM_DR3_LAN"),getenv("DM_LANG"),g_testSession?"test-copy":"local");
         char *args[]={(char *)binary.fileSystemRepresentation,(char *)rewrite.fileSystemRepresentation,"main","sdk",NULL};
         execv(args[0],args);[NSException raise:@"Launch failed" format:@"%s",strerror(errno)];
     } @catch(NSException *e) {
-        NSAlert *alert=[NSAlert new];alert.messageText=@"游戏未能启动";alert.informativeText=e.reason?:@"请检查本机游戏资源后重试。";[alert runModal];
+        NSAlert *alert=[NSAlert new];alert.messageText=NSLocalizedString(@"alert.failed.title",nil);alert.informativeText=e.reason?:NSLocalizedString(@"alert.failed.body",nil);[alert runModal];
         self.starting=NO;self.play.enabled=YES;
     }
 }

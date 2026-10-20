@@ -18,7 +18,8 @@ TITLE = '01001B300B9BE000'
 COMMIT = '9579030e5b1f0443c12b7376559560915b6d4c4b'
 PROFILE = ROOT / 'config/diablo3-2.7.7.json'
 # zh-Hans needs the separate zhCN language DLC; only enUS ships in the pinned base set.
-LANG = 'enUS'
+LANG = 'system'
+LANG_TAGS = ('system', 'en-US', 'zh-Hans')
 SUFFIXES = ('patched.bin', 'fixups.tsv', 'gates.tsv', 'sites.tsv', 'cuts.tsv', 'obs.tsv', 'params.tsv')
 
 
@@ -32,6 +33,18 @@ def save(path, value):
     tmp = path.with_suffix(path.suffix + '.tmp')
     tmp.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
     tmp.replace(path)
+
+
+def resolve_lang(value):
+    if value == 'system':
+        try:
+            output = subprocess.check_output(['defaults', 'read', '-g', 'AppleLanguages'],
+                                             text=True, stderr=subprocess.DEVNULL, timeout=5)
+            match = re.search(r'^\s*\(?\s*"?([A-Za-z0-9_-]+)"?', output)
+            value = match.group(1) if match else 'en-US'
+        except (OSError, subprocess.SubprocessError):
+            value = 'en-US'
+    return 'zh-Hans' if value.lower().startswith('zh') else 'en-US'
 
 
 def env():
@@ -231,7 +244,7 @@ def launch(args):
         (WORK / 'run' / name).mkdir(exist_ok=True)
     settings = dict(DM_ROMFS=str(WORK / 'game/RomFS'), DM_SAVE=str(WORK / 'run/save'),
                     DM_TEMP=str(WORK / 'run/temp'), DM_WINDOW='1', DM_DBG='1', DM_AUDIO='1',
-                    DM_LANG=args.lang, DM_AOC_DIR=str(WORK / 'aoc'), MTL_HUD_ENABLED='1',
+                    DM_LANG=resolve_lang(args.lang), DM_AOC_DIR=str(WORK / 'aoc'), MTL_HUD_ENABLED='1',
                     DM_NVN_SHMAP=str(UPSTREAM / 'dm/games' / TITLE / 'shader_map.tsv'),
                     DM_MSL_DIR=str(WORK / 'build/cache/metal_shader_cache'), DM_PSO_MANIFEST='off', DM_NVN_TBDR='0',
                     DM_NVN_UNIFORM_FORWARD='1',
@@ -285,7 +298,7 @@ def main():
     prep.add_argument('--keys', type=Path, required=True, help='Your own local keyset; never uploaded or required at runtime')
     start = commands.add_parser('run')
     start.add_argument('--seconds', type=int, default=30)
-    start.add_argument('--lang', default=LANG, help='Game UI language; zh-Hans requires the zhCN DLC pack')
+    start.add_argument('--lang', choices=LANG_TAGS, default=LANG, help='Game UI language: system, en-US, or zh-Hans; zh-Hans requires the zhCN DLC pack')
     start.add_argument('--capture-shaders', action='store_true', help='Diagnostic only: missing stages may omit draws')
     start.add_argument('--keys', help='Timed diagnostic gamepad input using the upstream DM_KEYS syntax')
     start.add_argument('--inspect-frame', type=int, help='Dump actual pass bindings and render targets')
