@@ -1933,6 +1933,186 @@ index 3d309a1..ec44a2c 100644
 +HLE_FORCE("_ZN2nn5audio12ListAudioInsEPNS0_11AudioInInfoEi", "No capture devices in this host", int, h_audio_ListIns, void *infos, int capacity) {
 +    (void)infos; (void)capacity; return 0;
 +}
+diff --git a/dm/host/hle_d3_pubfile.c b/dm/host/hle_d3_pubfile.c
+new file mode 100644
+index 0000000..23023f3
+--- /dev/null
++++ b/dm/host/hle_d3_pubfile.c
+@@ -0,0 +1,174 @@
++/* Diablo III offline publisher files: hand Seasons.txt / Blacklist.txt to the game's own lobby callbacks.
++ *
++ * The game fetches both files from the online service; with no service the season calendar stays empty and the
++ * Journey never appears. Instead of patching the lobby state, this substitutes the two downloaded documents: the
++ * retrieval callbacks parse them exactly as if the service had answered.
++ *
++ * Driven from oe::TryPopNotificationMessage (hle_oe.c) rather than the NVN present path: the render thread can
++ * hold graphics locks in present, and calling into the lobby from there risks a lock-order deadlock.
++ */
++#include "dm.h"
++#include "dm_d3_graphics.h"
++#include "hle.h"
++#include <stdatomic.h>
++#include <stddef.h>
++
++#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
++
++// Payloads carry no season data of their own: the game only needs the calendar and the (empty) item blacklist.
++// Byte-for-byte the strings d3hack synthesises (god-jester/d3hack, source/program/d3/hooks/season_events.hpp);
++// the trailing blank line belongs to the seasons document format.
++static const char k_seasons_text[] =
++    "# Format for dates MUST be: \" ? ? ? , DD MMM YYYY hh : mm:ss UTC\"\n"
++    "# The Day of Month(DD) MUST be 2 - digit; use either preceding zero or trailing space\n"
++    "[Season 37]\n"
++    "Start \"Sat, 09 Feb 2025 00:00:00 GMT\"\n"
++    "End \"Tue, 09 Feb 2036 01:00:00 GMT\"\n\n";
++static const char k_blacklist_text[] =
++    "# Blacklist overridden by d3hack\n"
++    "[GBID]\n\n"
++    "[SNO]\n";
++#define SEASONS_BYTES 239u
++#define BLACKLIST_BYTES 47u
++
++// blz::string is 0x28 bytes: text, size, capacity-with-flags, then inline SSO scratch. The engine reads these
++// fields directly (no accessor on the retrieval path), so the layout is reproduced here.
++// bit63 of the capacity marks embedded storage: the guest then never calls the allocator on the text pointer,
++// which matters because the text below lives in host memory.
++typedef struct { const char *data; uint64_t size; uint64_t capacity; uint64_t sso[2]; } blz_string;
++typedef struct { void *pointer; void *manager; } blz_shared_ptr;
++_Static_assert(sizeof(blz_string) == 0x28, "blz::string layout");
++_Static_assert(offsetof(blz_string, data) == 0x00 && offsetof(blz_string, size) == 0x08 && offsetof(blz_string, capacity) == 0x10, "blz::string fields");
++_Static_assert(sizeof(blz_shared_ptr) == 0x10, "blz::shared_ptr layout");
++
++// main 2.7.7 (build 2607a74f…) globals reached by the retrieval callbacks.
++enum {
++    OFF_SEASONS_PARSED = 0x114ac48,   // uint8_t **: "seasons.txt was parsed" flag
++    OFF_SEASONS_VEC    = 0x114ac58,   // vector object { data, size, capacity }: season calendar
++    OFF_SEASONS_XVAR   = 0x114ac60,   // seasons-override xvar, read by the callback
++    OFF_ONLINE_XVAR    = 0x114ac68,   // online-service xvar, read by the callback
++    OFF_BLACKLIST_FLAG = 0x114ae58,   // uint8_t **: "blacklist applied" flag
++    OFF_LOBBY_A        = 0x114b0a0,   // lobby objects the callbacks reach through
++    OFF_LOBBY_B        = 0x114b128,
++    OFF_BLACKLIST_CB   = 0x657f0,     // OnBlacklistFileRetrieved(self, eResult, shared_ptr<blz::string> *)
++    OFF_SEASONS_CB     = 0x65270,     // OnSeasonsFileRetrieved(self, eResult, shared_ptr<blz::string> *)
++};
++enum { MAX_INJECTIONS = 8 };
++
++static blz_string *s_seasons, *s_blacklist;
++static blz_shared_ptr *s_sp_seasons, *s_sp_blacklist;
++static int s_off = 1;                      // stays set until pubfile_init decides to run
++static uint64_t s_delay = 600;             // the lobby is not up before the front end; injecting earlier just hits null globals
++static unsigned s_injections;
++static pthread_once_t s_once = PTHREAD_ONCE_INIT;
++
++static void pubfile_init(void) {
++    const char *on = getenv("DM_D3_PUBFILE");
++    if (on && !strcmp(on, "0")) { LOG("d3 pubfile: INFO disabled by DM_D3_PUBFILE=0"); return; }
++    const char *d = getenv("DM_D3_PUBFILE_DELAY");
++    if (d && *d) {
++        char *end; unsigned long long v = strtoull(d, &end, 10);
++        if (end == d || *end) die("DM_D3_PUBFILE_DELAY 非法：%s", d);
++        s_delay = v;
++    }
++    // The offsets and callback entries below belong to one signed image; the svc gates prove this build output
++    // actually carries the two branch gates the substitution was surveyed against.
++    if (strcmp(dm_main_build(), DM_D3_MAIN_BUILD_ID) || !gate_svc_present(SVC_HOST_D3_SEASONS_FILE) || !gate_svc_present(SVC_HOST_D3_BLACKLIST_FILE)) {
++        LOG("d3 pubfile: INFO disabled (main build %s, svc 0x90=%d 0x91=%d)", dm_main_build()[0] ? dm_main_build() : "(none)",
++            gate_svc_present(SVC_HOST_D3_SEASONS_FILE), gate_svc_present(SVC_HOST_D3_BLACKLIST_FILE));
++        return;
++    }
++    size_t sl = strlen(k_seasons_text), bl = strlen(k_blacklist_text);
++    if (sl != SEASONS_BYTES || bl != BLACKLIST_BYTES) {
++        LOG("d3 pubfile: payload size mismatch seasons=%zu (want %u) blacklist=%zu (want %u), disabled", sl, SEASONS_BYTES, bl, BLACKLIST_BYTES);
++        return;
++    }
++    // One block, never freed: the guest may keep pointers into it for the rest of the process.
++    size_t cap = sl + bl + 3 * 15 + 2 * sizeof(blz_string) + 2 * sizeof(blz_shared_ptr);
++    uint8_t *buf = malloc(cap);
++    if (!buf) { LOG("d3 pubfile: INFO out of memory, disabled"); return; }
++    memcpy(buf, k_seasons_text, sl);
++    memcpy(buf + sl, k_blacklist_text, bl);
++    uint8_t *p = buf + sl + bl;
++    // The engine reads the headers with 8-byte loads but the shared_ptr pair is copied whole; keep both aligned.
++    p = (uint8_t *)(((uintptr_t)p + 15) & ~(uintptr_t)15);
++    s_seasons = (blz_string *)p; p += sizeof *s_seasons;
++    p = (uint8_t *)(((uintptr_t)p + 15) & ~(uintptr_t)15);
++    s_blacklist = (blz_string *)p; p += sizeof *s_blacklist;
++    p = (uint8_t *)(((uintptr_t)p + 15) & ~(uintptr_t)15);
++    s_sp_seasons = (blz_shared_ptr *)p; p += sizeof *s_sp_seasons;
++    s_sp_blacklist = (blz_shared_ptr *)p;
++    const uint64_t embedded = 1ull << 63;
++    *s_seasons = (blz_string){(const char *)buf, sl, (uint64_t)sl | embedded, {0, 0}};
++    *s_blacklist = (blz_string){(const char *)buf + sl, bl, (uint64_t)bl | embedded, {0, 0}};
++    s_sp_seasons->pointer = s_seasons; s_sp_seasons->manager = NULL;
++    s_sp_blacklist->pointer = s_blacklist; s_sp_blacklist->manager = NULL;
++    s_off = 0;
++    LOG("d3 pubfile: INFO enabled (main %s, %.0f frames delay, seasons %zu B, blacklist %zu B)", dm_main_build(), (double)s_delay, sl, bl);
++}
++
++static module_t *main_module(void) {
++    for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) return &g_mod[i];
++    return NULL;
++}
++
++static void *grab(uint8_t *base, unsigned off) { return *(void **)(base + off); }
++
++// The callbacks dereference all of these; calling before the lobby/XVar objects exist would fault in guest code.
++static int lobby_ready(uint8_t *base) {
++    return grab(base, OFF_SEASONS_VEC) && grab(base, OFF_SEASONS_XVAR) && grab(base, OFF_ONLINE_XVAR) &&
++           grab(base, OFF_LOBBY_A) && grab(base, OFF_LOBBY_B);
++}
++
++static uint64_t seasons_size(uint8_t *base) {
++    void *vec = grab(base, OFF_SEASONS_VEC);
++    return vec ? *(uint64_t *)((uint8_t *)vec + 8) : 0;
++}
++
++static void inject(uint8_t *base) {
++    // The callback may have replaced the pair on an earlier pass; reset it before every call.
++    s_sp_blacklist->pointer = s_blacklist; s_sp_blacklist->manager = NULL;
++    s_sp_seasons->pointer = s_seasons; s_sp_seasons->manager = NULL;
++    // eResult must be 0: the retrieval body is only entered on success (the season callback tests it with
++    // cbz before its prologue; 3 is the network failure result and would return without parsing).
++    ((void (*)(void *, int, void *))(base + OFF_BLACKLIST_CB))(NULL, 0, s_sp_blacklist);
++    ((void (*)(void *, int, void *))(base + OFF_SEASONS_CB))(NULL, 0, s_sp_seasons);
++    s_injections++;
++}
++
++static void report(uint8_t *base) {
++    void *vec = grab(base, OFF_SEASONS_VEC);
++    uint64_t n = vec ? *(uint64_t *)((uint8_t *)vec + 8) : 0;
++    void *data = n ? *(void **)vec : NULL;
++    uint64_t season = data ? *(uint32_t *)data : 0;
++    uint64_t start = data ? *(uint64_t *)((uint8_t *)data + 0x10) : 0;
++    uint64_t end = data ? *(uint64_t *)((uint8_t *)data + 0x18) : 0;
++    uint8_t *fs = *(uint8_t **)(base + OFF_SEASONS_PARSED);
++    uint8_t *fb = *(uint8_t **)(base + OFF_BLACKLIST_FLAG);
++    LOG("d3 pubfile: seasons vec=%p n=%llu season=%u start=%llu end=%llu flags seasons=%u blacklist=%u", vec,
++        (unsigned long long)n, (unsigned)season, (unsigned long long)start, (unsigned long long)end,
++        fs ? (unsigned)*fs : 0u, fb ? (unsigned)*fb : 0u);
++}
++
++void dm_d3_pubfile_tick(void) {
++    pthread_once(&s_once, pubfile_init);
++    if (s_off || dm_guest_frame() < s_delay) return;
++    static _Atomic int busy;
++    if (atomic_exchange(&busy, 1)) return;
++    module_t *m = main_module();
++    if (!m || !lobby_ready(m->base)) { atomic_store(&busy, 0); return; }
++    if (!s_injections) {
++        inject(m->base);
++        report(m->base);
++    } else if (!seasons_size(m->base) && s_injections < MAX_INJECTIONS) {
++        // The lobby is torn down and rebuilt on reconnect / character switch (main+0x72f7c clears the calendar).
++        // Without re-arming, the Journey disappears for the rest of the session; the cap keeps a pathological
++        // reset loop from calling the lobby on every frame.
++        LOG("d3 pubfile: seasons cleared by the lobby reset, re-arm %u/%u", s_injections + 1, MAX_INJECTIONS);
++        inject(m->base);
++        report(m->base);
++    }
++    atomic_store(&busy, 0);
++}
++
++#endif
 diff --git a/dm/host/hle_hid.c b/dm/host/hle_hid.c
 index 561a3c8..e126dcf 100644
 --- a/dm/host/hle_hid.c
@@ -2929,6 +3109,18 @@ index 234d762..672dfa6 100644
  // ---------- ssl: offline, Initialize succeeds (the network library's global initialization depends on it), everything else that contacts the service fails ----------
  // Not cut: Context / Connection construction and destruction, Context::GetContextId (only read and write game objects).
  #define SSF(m, cname, ...) HLE_FORCE(m, "ssl 服务（剪）：失败", Result, cname, __VA_ARGS__)
+diff --git a/dm/host/hle_oe.c b/dm/host/hle_oe.c
+index 180c62c..1120abc 100644
+--- a/dm/host/hle_oe.c
++++ b/dm/host/hle_oe.c
+@@ -221,6 +221,7 @@ static void scale3d_tick(void) {
+         *(uint32_t *)(renderer + 0xee88), *(uint32_t *)(renderer + 0xee8c), (unsigned long long)dm_nvn_frame_count());
+ }
+ HLE_FORCE("_ZN2nn2oe25TryPopNotificationMessageEPj", "系统通知队列；前端状态变化入队", unsigned, h_oe_TryPopMsg, uint32_t *msg) {
++    { extern void dm_d3_pubfile_tick(void) __attribute__((weak)); if (dm_d3_pubfile_tick) dm_d3_pubfile_tick(); }   // D3 publisher files (hle_d3_pubfile.c): the main loop pumps notifications every frame, unlike present (which can run with graphics locks held)
+     scale3d_tick();
+     pthread_once(&g_oe_once, oe_script_start);
+     pthread_mutex_lock(&g_mq_lock);
 diff --git a/dm/host/hle_offline.c b/dm/host/hle_offline.c
 index 367779a..9eccbc0 100644
 --- a/dm/host/hle_offline.c
