@@ -2034,10 +2034,10 @@ index 3d309a1..ec44a2c 100644
 +}
 diff --git a/dm/host/hle_d3_pubfile.c b/dm/host/hle_d3_pubfile.c
 new file mode 100644
-index 0000000..d9da2dc
+index 0000000..161e0a1
 --- /dev/null
 +++ b/dm/host/hle_d3_pubfile.c
-@@ -0,0 +1,458 @@
+@@ -0,0 +1,455 @@
 +/* Diablo III offline publisher files: hand Seasons.txt / Blacklist.txt to the game's own lobby callbacks.
 + *
 + * The game fetches both files from the online service; with no service the season calendar stays empty and the
@@ -2337,9 +2337,9 @@ index 0000000..d9da2dc
 +static void challenge_once(uint8_t *base) {
 +    if (s_cr_off || s_cr_attempted) return;
 +    s_cr_attempted = 1;
-+    // The registry ready byte (OFF_CR_READY + 0x18) is measured 0xc6 offline but 0xc1 in a live session, so bit 0x4 is
-+    // not set there and has to be written (on the resolved object, below); the XVar above is turned on for the same
-+    // reason, the callback wants rifts enabled on both.
++    // The XVar above is turned on because the callback wants rifts enabled. The other input, the registry ready byte
++    // (OFF_CR_READY + 0x18, measured 0xc6 offline but 0xc1 in a live session), is left alone: that byte is the game's
++    // online-service state, and the branch that tests it is bypassed statically instead (patch_nso.py cut 0x185fd0).
 +    void *xvar = grab(base, OFF_CR_XVAR);
 +    int set = xvar ? ((xvar_bool_set_fn)(base + OFF_XVAR_BOOL_SET))(xvar, 1, XVAR_DIRTY) : -1;
 +    LOG("d3 pubfile: challenge xvar=%p set(1)=%d", xvar, set);
@@ -2375,16 +2375,13 @@ index 0000000..d9da2dc
 +        void *handle = grab(base, OFF_CR_READY);
 +        void *resolved = handle ? ((resolve_ns_fn)(base + OFF_CR_RESOLVE))(handle, 1) : NULL;
 +        unsigned flags = resolved ? *(uint8_t *)((uint8_t *)resolved + 0x18) & 0xffu : 0u;
-+        // The early exit at 0x185fd0 (tbz w8,#2) tests this byte on the resolved object, so the write has to land on
-+        // that same pointer; setting it on the registry handle (what cr_probe samples) would not be seen.
-+        unsigned flags_after = flags;
-+        if (resolved) {
-+            ((uint8_t *)resolved)[0x18] |= 0x4;
-+            flags_after = *(uint8_t *)((uint8_t *)resolved + 0x18) & 0xffu;
-+        }
++        // The early exit at 0x185fd0 (tbz w8,#2) tests this byte on the resolved object, not on the registry handle
++        // that cr_probe samples. The rewriter nops that branch (patch_nso.py cut 0x185fd0) and the byte stays
++        // untouched: setting bit 0x4 here made the rest of the front end believe an online session exists, which broke
++        // the main-menu Continue action.
 +        if (handle)
-+            LOG("d3 pubfile: challenge gate handle=%p resolved=%p same=%d flags=%#x -> %#x", handle, resolved,
-+                resolved == handle, flags, flags_after);
++            LOG("d3 pubfile: challenge gate handle=%p resolved=%p same=%d flags=%#x", handle, resolved,
++                resolved == handle, flags);
 +        else
 +            LOG("d3 pubfile: challenge gate handle=%p resolved=(skipped) same=%d flags=%#x", handle, 0, flags);
 +        uint64_t now = ((now_ns_fn)(base + OFF_CLOCK_NOW))();
@@ -3798,10 +3795,10 @@ index e237a24..2fe8d62 100644
      int front = m->patch_off < 0;
      if (z0 + zw != (front ? m->file_image_len : (uint64_t)m->patch_off) || (z0 & 0x3FFF) || (zw & 0x3FFF) || (z1 & 0x3FFF) || ((uintptr_t)x0 & 0x3FFF) || ((uintptr_t)w & 0x3FFF) || ((uintptr_t)x1 & 0x3FFF))
 diff --git a/dm/tools/patch_nso.py b/dm/tools/patch_nso.py
-index 837700c..911c355 100644
+index 837700c..98f861c 100644
 --- a/dm/tools/patch_nso.py
 +++ b/dm/tools/patch_nso.py
-@@ -46,6 +46,19 @@ else:
+@@ -46,6 +46,28 @@ else:
  # Networking cuts (excluded scope: Battle.net / online play): taken from a community offline fix (LFS Mod Offline Fix for v2228224, which differs from the official 94012 main in only these 7 words).
  # Measured: the system service layer (nifm offline / DNS black hole / account service) cannot get around it: the game itself sends Battle.net requests directly and allows offline play according to the "last online" time.
  CUTS = {
@@ -3817,11 +3814,20 @@ index 837700c..911c355 100644
 +    (0x1bd140, '159140b9', 'b5048052', 'd3hack dynamic_seasonal_05：season_created 的 ldr w21,[x8,#0x90] → movz w21,#37'),
 +    (0x1bf5f0, 'ff0304d1', '00008052', 'd3hack dynamic_seasonal_08：ValidateHeroForPartyMember 的 sub sp,sp,#0x100 → movz w0,#0，返回 error_none'),
 +    (0x1bf5f4, 'f76300f9', 'c0035fd6', 'd3hack dynamic_seasonal_09：紧随其后的 str x23,[sp,#0xc0] → ret，跳过函数体'),
++    # Cut, not a host write: the host calls 0x185f70 directly offline (host/hle_d3_pubfile.c challenge_once), and
++    # 0x185fd0 tests bit 0x4 of *(resolve_ns(*(0x114d998), 1) + 0x18), the game's online-service state, which the host
++    # must not modify (setting it made the rest of the front end believe a session exists and broke the main-menu
++    # Continue). Original word derived from the image rather than encoded by hand: struct.unpack_from('<I',
++    # work/rewrite/main.patched.bin, 0x185fd0) = 0x361003a8, disassembled by capstone as 'tbz w8, #2, #0x186044' with
++    # imm5 = 2 (so the tested bit is 0x4) and target 0x186044, i.e. the body at 0x185fd4 runs when the bit is set;
++    # nop = 0xd503201f always falls through. Bytes below are in image order (little-endian).
++    (0x185fd0, 'a8031036', '1f2003d5', '挑战秘境数据回调门：OnGetChallengeRiftData 的早退 tbz w8,#2,#0x186044 → nop（原字 0x361003a8 自映像解出），'
++     '回调体照常执行；宿主离线直接调这个回调，而该字节是在线服务状态、宿主不得改写（置 0x4 会让前端以为有会话，主菜单「继续」失效）', '仅宿主'),
 +  ],
    # Super Mario Bros. Wonder v0 main
    'cd6e42aee7934f4d8393cd43893ae25e': [
      # Resource heap slack: each resource unit's ExpHeap is created with the resource size table value + 0x1008 (main+0x1e603c → ExpHeap::create main+0x4aac38); the table holds Nintendo's measured peaks with almost no margin
-@@ -680,7 +693,12 @@ for a in sorted(kinds):
+@@ -680,7 +702,12 @@ for a in sorted(kinds):
      elif k in ('cntpct', 'cntvct'): st = site_gate(ins, k, arg); stat(k)
      elif k == 'ctr':   # replaced in place by a constant: DminLine = 4 (64-byte lines); movz xN, #4, lsl #16
          assert arg != 18, f'{a:x} mrs x18, ctr_el0'
@@ -3835,7 +3841,7 @@ index 837700c..911c355 100644
      put_branch(a, st)
  
  # Private visual branch; not OBS, 0x85 is a read-only query. Only this experimental build explicitly opts in; the original Qty/children and Update are unchanged.
-@@ -819,6 +837,50 @@ if RULE_RUN and PRIVATE_GATES:
+@@ -819,6 +846,50 @@ if RULE_RUN and PRIVATE_GATES:
      cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
                   'merc slots (client): hireling can-equip check, between "mov w1,#0x25" and the type test -> host swaps w1 to the item\'s own type for ring/amulet/boots/gloves/belt (rift best >= 10); x8 stays 0, original insn runs ->0x3beb5c; svc8e', '仅宿主'))
  
