@@ -1835,6 +1835,19 @@ index 1a63bd7..9fcffec 100644
  void stubs_report(void) { LOG("stubs=%u", g_nstub); }
  
  // ---------- Host gate dispatch ----------
+diff --git a/dm/host/hle.h b/dm/host/hle.h
+index 79fda3d..bb8a80f 100644
+--- a/dm/host/hle.h
++++ b/dm/host/hle.h
+@@ -77,4 +77,7 @@ uint64_t dm_audio_render_calls(void);   // Cumulative sound card callback count
+ //   0x8c   Current act saved while in a rift (when the character is in a rift map w9 is replaced with 4 = Act V, writes x9; x8 always 0) dm_rift.c      0x6fa9d0 (branch gate: x8≠0 jumps to 0x6fa9d4, otherwise executes the original instruction and returns to 0x6fa9d4)
+ //   0x8d   Extra mercenary equipment slots (mercenary + rift level ≥10 + belt / boots / gloves / ring / amulet: w0 is replaced with 1, writes x0; x8 always 0) dm_rift.c      0x64a34c (branch gate: x8≠0 jumps to 0x64a350, otherwise executes the original instruction and returns to 0x64a350)
+ //   0x8e   Client-side check for the extra mercenary equipment slots (rift level ≥10 + the item is a belt / boots / gloves / ring / amulet: w1 is replaced with the item's own type number, writes x1; x8 always 0) dm_rift.c      0x3beb58 (branch gate: x8≠0 jumps to 0x3beb5c, otherwise executes the original instruction and returns to 0x3beb5c)
+-enum { SVC_HOST_TACT_ZLIB = 0x80, SVC_HOST_C2S_DELIVER = 0x81, SVC_HOST_C2S_SYS = 0x82, SVC_HOST_GRANNY_A = 0x83, SVC_HOST_GRANNY_B = 0x84, SVC_HOST_PRIVATE_SKILL_RENDER = 0x85, SVC_HOST_PRIVATE_SKILL_AIM = 0x86, SVC_HOST_GROUND_ASSET = 0x87, SVC_HOST_DROP_SOUND = 0x88, SVC_HOST_RIFT_EXIT = 0x89, SVC_HOST_JOIN_SPAWN = 0x8a, SVC_HOST_JOIN_CORPSE = 0x8b, SVC_HOST_SAVE_ACT = 0x8c, SVC_HOST_MERC_SLOT = 0x8d, SVC_HOST_MERC_SLOT_CL = 0x8e };   // 0x87: fetch the model path for ground items (dm_dropfilter.c drop light)   // 0x83/0x84: Granny per-block decode call sites (hle_granny.c)
++//   0x8f   Diablo III publisher file Config.txt result test, observe only (OnConfigFileRetrieved)  host_stubs.c   0x64268（分支门：x8≠0 跳 0x6426c，否则执行原指令回 0x6426c；svc8f 仅宿主观测，x8 恒 0，不写 guest 内存）
++//   0x90   Diablo III publisher file Seasons.txt result test, observe only (OnSeasonsFileRetrieved)  host_stubs.c   0x6527c（分支门：x8≠0 跳 0x6529c，否则执行原指令回 0x65280；svc90 仅宿主观测，x8 恒 0，不写 guest 内存）
++//   0x91   Diablo III publisher file Blacklist.txt result test, observe only (OnBlacklistFileRetrieved)  host_stubs.c   0x6581c（分支门：x8≠0 跳 0x6583c，否则执行原指令回 0x65820；svc91 仅宿主观测，x8 恒 0，不写 guest 内存）
++enum { SVC_HOST_TACT_ZLIB = 0x80, SVC_HOST_C2S_DELIVER = 0x81, SVC_HOST_C2S_SYS = 0x82, SVC_HOST_GRANNY_A = 0x83, SVC_HOST_GRANNY_B = 0x84, SVC_HOST_PRIVATE_SKILL_RENDER = 0x85, SVC_HOST_PRIVATE_SKILL_AIM = 0x86, SVC_HOST_GROUND_ASSET = 0x87, SVC_HOST_DROP_SOUND = 0x88, SVC_HOST_RIFT_EXIT = 0x89, SVC_HOST_JOIN_SPAWN = 0x8a, SVC_HOST_JOIN_CORPSE = 0x8b, SVC_HOST_SAVE_ACT = 0x8c, SVC_HOST_MERC_SLOT = 0x8d, SVC_HOST_MERC_SLOT_CL = 0x8e, SVC_HOST_D3_CONFIG_FILE = 0x8f, SVC_HOST_D3_SEASONS_FILE = 0x90, SVC_HOST_D3_BLACKLIST_FILE = 0x91 };   // 0x87: fetch the model path for ground items (dm_dropfilter.c drop light)   // 0x83/0x84: Granny per-block decode call sites (hle_granny.c)
 diff --git a/dm/host/hle_account.c b/dm/host/hle_account.c
 index 362a6c2..b32be1e 100644
 --- a/dm/host/hle_account.c
@@ -3019,6 +3032,48 @@ index 96d2674..579e8ae 100644
  void hle_signal_system_event(void *ev) {   // An unbound one is bound on the spot as manual-clear (can only happen on a guest thread)
      pthread_mutex_lock(&g_se_lock); uint32_t wh = se_find(ev); pthread_mutex_unlock(&g_se_lock);
      if (!wh) { hle_bind_system_event(ev, 0); pthread_mutex_lock(&g_se_lock); wh = se_find(ev); pthread_mutex_unlock(&g_se_lock); }
+diff --git a/dm/host/host_stubs.c b/dm/host/host_stubs.c
+index ef7f336..15d7e41 100644
+--- a/dm/host/host_stubs.c
++++ b/dm/host/host_stubs.c
+@@ -2,6 +2,7 @@
+ // the generic host still calls them, and they get empty implementations here. When a feature is redone for this game, replace the matching stub with the real thing.
+ #include "dm.h"
+ #include "front.h"
++#include "hle.h"
+ 
+ void crash_sample_self(void) {}
+ void inflate_bench_maybe(void) {}
+@@ -24,4 +25,29 @@ uint64_t dm_game_res(int docked) { return front_game_res(docked); }
+ int dm_screen_real(int *w, int *h) { *w = *h = 0; return 0; }
+ void dm_ui_rect(int *x, int *y, int *w, int *h) { *x = *y = *w = *h = 0; }
+ // svc #0x80.. host gates: only D2R's rewrite rules create them; they should not appear in this game's build output
++#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
++// Diablo III publisher-file gates (0x8f Config / 0x90 Seasons / 0x91 Blacklist), observation only: read the three blz::string
++// fields the lobby handed back and report them once per number. x8 is forced to 0 so the branch gate always executes the
++// original result test; diverting would have to splice a substituted string into the guest, which needs the guest allocator.
++uint64_t svc_host_call(int num, uint64_t *regs) {
++    if (num < SVC_HOST_D3_CONFIG_FILE || num > SVC_HOST_D3_BLACKLIST_FILE) die("svc_host_call：未登记的宿主门 svc #%#x", num);
++    static uint8_t logged[3];
++    unsigned k = (unsigned)num - SVC_HOST_D3_CONFIG_FILE;
++    int ptr_reg = num == SVC_HOST_D3_CONFIG_FILE ? 20 : 2;   // Config moved its shared_ptr x2→x20, the other two keep x2
++    int res_reg = num == SVC_HOST_D3_CONFIG_FILE ? 21 : 1;
++    if (!logged[k]) {
++        logged[k] = 1;
++        uint64_t psz = regs[ptr_reg];
++        if (!psz) LOG("d3 pubfile svc#%#x shared_ptr x%d is null (observe only, x8 forced 0)", num, ptr_reg);
++        else {
++            uint64_t so = *(const uint64_t *)psz;
++            LOG("d3 pubfile svc#%#x result=%u str=%#llx elems=%#llx size=%llu capraw=%#llx", num, (unsigned)regs[res_reg], so,
++                so ? *(const uint64_t *)so : 0, so ? *(const uint64_t *)(so + 8) : 0, so ? *(const uint64_t *)(so + 0x10) : 0);
++        }
++    }
++    regs[8] = 0;
++    return 1;
++}
++#else
+ uint64_t svc_host_call(int num, uint64_t *regs) { (void)regs; die("svc_host_call：本作没有宿主门 svc #%#x", num); }
++#endif
 diff --git a/dm/host/lan_native.h b/dm/host/lan_native.h
 new file mode 100644
 index 0000000..00d42c8
@@ -3168,7 +3223,7 @@ index e237a24..2fe8d62 100644
      int front = m->patch_off < 0;
      if (z0 + zw != (front ? m->file_image_len : (uint64_t)m->patch_off) || (z0 & 0x3FFF) || (zw & 0x3FFF) || (z1 & 0x3FFF) || ((uintptr_t)x0 & 0x3FFF) || ((uintptr_t)w & 0x3FFF) || ((uintptr_t)x1 & 0x3FFF))
 diff --git a/dm/tools/patch_nso.py b/dm/tools/patch_nso.py
-index 837700c..bdc2849 100644
+index 837700c..911c355 100644
 --- a/dm/tools/patch_nso.py
 +++ b/dm/tools/patch_nso.py
 @@ -46,6 +46,19 @@ else:
@@ -3205,3 +3260,54 @@ index 837700c..bdc2849 100644
      put_branch(a, st)
  
  # Private visual branch; not OBS, 0x85 is a read-only query. Only this experimental build explicitly opts in; the original Qty/children and Update are unchanged.
+@@ -819,6 +837,50 @@ if RULE_RUN and PRIVATE_GATES:
+     cuts.append((off, struct.pack('<I', word).hex(), struct.pack('<I', B(off, start)).hex(),
+                  'merc slots (client): hireling can-equip check, between "mov w1,#0x25" and the type test -> host swaps w1 to the item\'s own type for ring/amulet/boots/gloves/belt (rift best >= 10); x8 stays 0, original insn runs ->0x3beb5c; svc8e', '仅宿主'))
+ 
++# ---- Publisher-file branch gates: {NSO build ID: [(site, original branch word, divert target, svc number, reason, normal continuation)]}. ----
++# Each row replaces the result test of one lobby retrieval callback with a branch gate of the 0x85 / 0x89 shape: x8≠0 jumps
++# to the divert target (the callback body), otherwise the original branch runs and control continues at the normal
++# continuation. These are not private gates: RULE_RUN is the touch-only flag (it asserts the touch build ID), while the D3
++# host has no touch build and the observation is wanted in the ground-truth domains too, so the switch is RULE_RUN's
++# build check replaced by NAME == 'main' and the row's own build ID -- not DM_PRIVATE_GATES.
++BRANCH_GATES = {
++  # Diablo III 2.7.7: OnConfigFileRetrieved / OnSeasonsFileRetrieved / OnBlacklistFileRetrieved. The host only observes in
++  # this iteration (host_stubs.c svc_host_call), so x8 stays 0 and both paths below collapse onto the original branch.
++  '2607a74f5df7754cc0357b5df7e49693': [
++    (0x64268, '35003a75', 0x6426c, 0x8f,
++     '发布文件 Config.txt：OnConfigFileRetrieved 结果判断 0x64268 的 cbnz w21,#0x649b4 → 分支门（x8≠0 跳 0x6426c，否则执行原 cbnz 回 0x6426c）；svc8f 仅宿主观测，不跳转', 0x6426c),
++    (0x6527c, '34000101', 0x6529c, 0x90,
++     '发布文件 Seasons.txt：OnSeasonsFileRetrieved 结果判断 0x6527c 的 cbz w1,#0x6529c → 分支门（x8≠0 跳 0x6529c，否则执行原 cbz 回 0x65280）；svc90 仅宿主观测，不跳转', 0x65280),
++    (0x6581c, '34000101', 0x6583c, 0x91,
++     '发布文件 Blacklist.txt：OnBlacklistFileRetrieved 结果判断 0x6581c 的 cbz w1,#0x6583c → 分支门（x8≠0 跳 0x6583c，否则执行原 cbz 回 0x65820）；svc91 仅宿主观测，不跳转', 0x65820),
++  ],
++}
++if NAME == 'main' and BUILD_ID in BRANCH_GATES:
++    for site, word, tgt, svc, why, cont in BRANCH_GATES[BUILD_ID]:
++        ow = struct.unpack_from('<I', IMG, site)[0]
++        assert f'{ow:08x}' == word, f'分支门原指令不符 {site:#x}：{ow:08x}'
++        assert site < TEXT_END and site not in kinds and not any(seg[0].address <= site < seg[-1].address + 4 for seg in windows), f'分支门与改写点冲突 {site:#x}'
++        start = here()
++        emit(STP_PRE(8, 31, 31, -16))
++        emit(STP_PRE(29, 30, 31, -16))
++        emit_gate_call(); emit(BLR(30))
++        ret = here(); emit(LDP_POST(29, 30, 31, 16))
++        emit(0x34000068)
++        emit(LDP_POST(8, 31, 31, 16)); emit(B(here(), tgt))
++        emit(LDP_POST(8, 31, 31, 16))
++        # The D3 sites are themselves conditional branches: copied verbatim into the patch area they would branch by the
++        # original offset from the wrong pc. A copy cannot point straight at the original target either (cbz/cbnz reach
++        # ±1 MB, the patch area is ~27 MB away), so it points one word ahead at a local `b <original target>` trampoline.
++        oi = dis(ow, site)
++        assert oi.mnemonic in ('cbz', 'cbnz'), f'分支门原指令必须是 cbz/cbnz {site:#x} {oi.mnemonic}'
++        t = oi.operands[-1].imm; pc = here(); tramp = pc + 8
++        cw = (ow & 0xFF00001F) | (((tramp - pc) >> 2 & 0x7FFFF) << 5)
++        di = dis(cw, pc); assert di.mnemonic == oi.mnemonic and di.operands[-1].imm == tramp, f'分支门原指令重编失败 {site:#x}'
++        emit(cw); emit(B(here(), cont)); emit(B(here(), t))
++        gates.append((ret, 'svc', svc, site))
++        put_branch(site, start); stat('pubfile')
++        cuts.append((site, struct.pack('<I', ow).hex(), struct.pack('<I', B(site, start)).hex(), why, '仅宿主'))
++
+ # ---- Parameter slots (host only): {NSO build ID: [(offset A, original word A, offset B, original word B, register, key, reason)]}.
+ # The two constant-building instructions at the original site are changed so that the first jumps to a parameter trampoline in the patch area and the second is a nop; the trampoline fetches the key page value indirectly and jumps back to just after the first (A+4): when A and B are not adjacent, the original instructions in between execute as usual
+ # (it used to jump back to B+4; in the operation-mode notification handler 0xe10d5c/0xe10d60 that skipped adrp x19.. and another trampoline, and switching to handheld crashed immediately; structck ⑩ checks the trampoline exit).

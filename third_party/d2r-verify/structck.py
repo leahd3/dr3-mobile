@@ -314,9 +314,27 @@ for off, oid, ow, why in obs:
 # ⑪ 剪口引入的分支门（hle.h 登记表形态「分支门：x8≠0 跳 0x目标，否则执行原指令回 0x原处+4」）：原处换成 B 进补丁区，块逐字 =
 #   stp x8,xzr,[sp,#-16]! ; stp x29,x30,[sp,#-16]! ; 键页取 KGATE ; ldr x30,[x30] ; ldr x29,[sp] ; blr x30 ; ldp x29,x30 ; cbz w8,+12 ;
 #   ldp x8,xzr ; b 目标 ; ldp x8,xzr ; 原指令 ; b 原处+4 —— x8 两路都恢复为原值，宿主结果只用于选路；gates.tsv 记 (svc, 号, 原处)
+#   原指令是 PC 相对条件分支（cbz/cbnz，暗黑发布文件门）时逐字复制会在补丁区按新 pc 算偏移：副本重编到原目标，
+#   超出 ±1 MB 时经跟随的一个字 `b 原目标` 跳板（补丁区离 text 约 27 MB）
 # ⑪ Branch gates introduced by cuts (hle.h registry form 「分支门：x8≠0 跳 0x目标，否则执行原指令回 0x原处+4」(branch gate: x8≠0 jumps to 0x<target>, otherwise executes the original instruction and returns to 0x<original site>+4)): the original site is replaced with a B into the patch area, and the block equals word for word
 #   stp x8,xzr,[sp,#-16]! ; stp x29,x30,[sp,#-16]! ; fetch KGATE via key page ; ldr x30,[x30] ; ldr x29,[sp] ; blr x30 ; ldp x29,x30 ; cbz w8,+12 ;
 #   ldp x8,xzr ; b target ; ldp x8,xzr ; original instruction ; b original site+4 - x8 is restored to its original value on both paths, the host result is only used to pick the path; gates.tsv records (svc, number, original site)
+#   When the original instruction is a PC-relative conditional branch (cbz/cbnz, the Diablo III publisher-file gates), a verbatim copy
+#   would compute its offset from the new pc in the patch area: the copy keeps the test and registers and is re-encoded to the
+#   original target, through a one-word `b original target` trampoline when that is beyond the ±1 MB reach (the patch area sits ~27 MB away)
+def _condt(w, o):
+    imm = (w >> 5) & 0x7FFFF; imm -= (imm & 0x40000) << 1
+    return o + 4 * imm
+def branch_copy_ok(ow, cw, at, roff):
+    """Copy of the original instruction in the gate block: verbatim, or for a PC-relative cbz/cbnz the same test and
+    registers with the target preserved - either encoded directly, or (the patch area is beyond the ±1 MB reach of a
+    conditional branch) pointing one word ahead at a local `b <original target>` trampoline."""
+    if cw == ow: return True
+    if not (ow & 0x7E000000 == 0x34000000 and cw & 0x7E000000 == 0x34000000
+            and cw & 0xFF00001F == ow & 0xFF00001F): return False
+    to, tc = _condt(ow, roff), _condt(cw, at)
+    if to == tc: return True
+    return PO <= tc and tc + 4 <= len(pat) and W(pat, tc) == B(tc, to)
 nbranch = 0
 for n, (roff, form) in _hreg.items():
     if not form.startswith('分支门'): continue
@@ -328,7 +346,8 @@ for n, (roff, form) in _hreg.items():
     if s_ is None or not (PO <= s_ < len(pat)) or W(pat, s_) != 0xA9BF7FE8 or W(pat, s_ + 4) != 0xA9BF7BFD or not ks or ks[1] != KEY.get('KGATE') \
             or W(pat, ks[0]) & 0xFFC00000 != 0xF9400000 or W(pat, ks[0] + 4) != LDR_X29_SP or W(pat, ks[0] + 8) != 0xD63F03C0 or W(pat, ks[0] + 12) != 0xA8C17BFD \
             or W(pat, ks[0] + 16) != 0x34000068 or W(pat, ks[0] + 20) != 0xA8C17FE8 or W(pat, ks[0] + 24) != B(ks[0] + 24, tgt) \
-            or W(pat, ks[0] + 28) != 0xA8C17FE8 or W(pat, ks[0] + 32) != W(orig, roff) or W(pat, ks[0] + 36) != B(ks[0] + 36, roff + 4):
+            or W(pat, ks[0] + 28) != 0xA8C17FE8 or not branch_copy_ok(W(orig, roff), W(pat, ks[0] + 32), ks[0] + 32, roff) \
+            or W(pat, ks[0] + 36) != B(ks[0] + 36, roff + 4):
         bad(f'分支门 svc #{n:#x} {roff:#x}：块不符模板'); continue
     if gates.get(ks[0] + 12) != ('svc', n, roff): bad(f'分支门 svc #{n:#x} gates.tsv 行不符：{gates.get(ks[0] + 12)}')
     seen.add(ks[0] + 12); nbranch += 1
