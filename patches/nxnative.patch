@@ -1964,10 +1964,10 @@ index 3d309a1..ec44a2c 100644
 +}
 diff --git a/dm/host/hle_d3_pubfile.c b/dm/host/hle_d3_pubfile.c
 new file mode 100644
-index 0000000..31a3a81
+index 0000000..d9da2dc
 --- /dev/null
 +++ b/dm/host/hle_d3_pubfile.c
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,458 @@
 +/* Diablo III offline publisher files: hand Seasons.txt / Blacklist.txt to the game's own lobby callbacks.
 + *
 + * The game fetches both files from the online service; with no service the season calendar stays empty and the
@@ -1976,6 +1976,10 @@ index 0000000..31a3a81
 + *
 + * Driven from oe::TryPopNotificationMessage (hle_oe.c) rather than the NVN present path: the render thread can
 + * hold graphics locks in present, and calling into the lobby from there risks a lock-order deadlock.
++ *
++ * The same path also feeds challengerift_config.dat + challengerift_NN.dat to OnGetChallengeRiftData and reports
++ * under its own "d3 pubfile: challenge" prefix; measured, the callback is called once per session after the seasons
++ * pair and publishes valid=1, so it is on by default and DM_D3_CHALLENGE=0 turns it off.
 + */
 +#include "dm.h"
 +#include "dm_d3_graphics.h"
@@ -2028,18 +2032,41 @@ index 0000000..31a3a81
 +    OFF_BLACKLIST_FLAG = 0x114ae58,   // uint8_t **: "blacklist applied" flag
 +    OFF_LOBBY_A        = 0x114b0a0,   // lobby objects the callbacks reach through
 +    OFF_LOBBY_B        = 0x114b128,
++    // Challenge-rift survey (cr_probe below): nothing in this file calls into these.
++    OFF_CR_SERVICE     = 0x114d940,   // service singleton, read as *(void **)(base + off)
++    OFF_CR_READY       = 0x114d998,   // registry object; *(uint8_t *)(obj + 0x18) & 4 gates the callback
++    OFF_CR_XVAR        = 0x1158fd8,   // challenge-rift-enabled XVar object pointer
++    // Challenge-rift injection call sites: the guest builds both messages from the payloads, the host owns the text.
++    OFF_CR_CONFIG_CTOR = 0x564d00,    // void ChallengeData_ctor(ChallengeData *), 0x40-byte protobuf message
++    OFF_CR_WEEKLY_CTOR = 0x62abe0,    // void WeeklyChallengeData_ctor(WeeklyChallengeData *), 0x40-byte message
++    OFF_CR_PARSE       = 0xbb2c50,    // bool ParsePartialFromString(Message *, const blz::string *data)
++    OFF_CR_CALLBACK    = 0x185f70,    // OnGetChallengeRiftData(bind, int *result, ChallengeData *, WeeklyChallengeData *)
++    OFF_XVAR_BOOL_SET  = 0xa26fc0,    // bool XVarBool_Set(XVarBool *this, bool value, uint32 dirty_flags)
 +    OFF_BLACKLIST_CB   = 0x657f0,     // OnBlacklistFileRetrieved(self, eResult, shared_ptr<blz::string> *)
 +    OFF_SEASONS_CB     = 0x65270,     // OnSeasonsFileRetrieved(self, eResult, shared_ptr<blz::string> *)
 +    // bool XVarUint32_Set(XVarUint32 *this, uint32 value, uint32 dirty_flags). 2.7.6 0xa272c0 → 2.7.7 by
 +    // nso_fnmap.py (containing function identical after address masking, +0x100 like the rest of the region).
 +    // 2.7.7 0xa273c0 stores value inline at this+0xb0 (ldaxr/stlxr) and notifies observers at this+0xa8.
 +    OFF_XVAR_SET       = 0xa273c0,
++    // Gate/clock survey (challenge_once): only called, never inspected by the injector.
++    OFF_CR_RESOLVE     = 0x327b50,    // void *resolve_ns(void *handle, uint32_t one): hash-map lookup of the registry handle
++    OFF_CLOCK_NOW      = 0x5fcb0,     // uint64_t now_ns(void), epoch 2000
++    OFF_CLOCK_UNIX     = 0xa430,      // int64_t ns_to_unix(uint64_t ns)
++    OFF_CLOCK_OFFSET   = 0x114a0c38,  // clock-offset object: { uint64_t value; uint32_t valid; ... }
++    // Challenge-unlock survey (challenge_once): the predicate behind the ModeSelect Challenge Rifts row, read-only.
++    // The row's caller (0x184804) enables it on (0x528320() == 0).
++    OFF_CR_UNLOCK      = 0x528320,    // int (void): *(uint8_t *)(inner + 0x64), or the fallback byte when inner is null
++    OFF_CR_UNLOCK_OBJ  = 0x574e0,     // void *(void): factory for the singleton whose +0x18 is `inner`
++    OFF_CR_UNLOCK_FALLBACK = 0x114a9c0,  // void **: object the predicate falls back to when inner is null
++    OFF_CR_GAMESTATE   = 0x4cafe0,    // int (void): the <state> == 6 test reached from 0x4c65b0
++    OFF_CR_GAMESTATE_RAW = 0x114a8d0,  // void **: the same value read straight off the global chain (+0x10 of the inner)
 +};
 +enum { MAX_INJECTIONS = 8 };
 +// Season values d3hack writes (patches.cpp: XVarUint32_Set(&g_varSeasonNum, 37, 3) / &g_varSeasonState, 1, 3).
 +enum { SEASON_NUM = 37, SEASON_STATE = 1, XVAR_DIRTY = 3 };
 +
 +typedef int (*xvar_uint32_set_fn)(void *xvar, uint32_t value, uint32_t dirty_flags);
++typedef int (*parse_partial_fn)(void *msg, const blz_string *data);
 +
 +static blz_string *s_seasons, *s_blacklist;
 +static blz_shared_ptr *s_sp_seasons, *s_sp_blacklist;
@@ -2053,6 +2080,73 @@ index 0000000..31a3a81
 +static _Atomic int s_vec_seasons;               // seasons vector non-empty as of the last report
 +static _Atomic unsigned s_injected;             // mirror of s_injections for the reader
 +static _Atomic int s_set_num = -1, s_set_state = -1;   // XVar setter return values (-1 = not called)
++static int s_cr_late;                            // the fixed post-report challenge-rift sample has been logged
++// Challenge-rift injection payload bytes plus the two blz::string headers over them (DM_D3_CHALLENGE=0 disables).
++static blz_string s_cr_config_str, s_cr_rift_str;
++static int s_cr_off = 1;                         // no payloads (flag absent, files missing) → nothing to do
++static int s_cr_attempted;                       // one attempt per session, no retry
++
++// {DM_D3_RIFT_DIR} or {DM_ROOT}/rift_data. Kept separate from the payload readers so the log can name the file only.
++static int rift_dir(char *out, size_t n) {
++    const char *dir = getenv("DM_D3_RIFT_DIR");
++    if (dir && *dir) { int r = snprintf(out, n, "%s", dir); return r > 0 && (size_t)r < n; }
++    const char *root = getenv("DM_ROOT");
++    if (!root || !*root) return 0;
++    int r = snprintf(out, n, "%s/rift_data", root);
++    return r > 0 && (size_t)r < n;
++}
++
++// Reads one publisher document whole (31 B config, 3-8 KB weekly). Returns NULL and sets *why on any problem, so
++// the caller can log a reason instead of failing the whole injector.
++static uint8_t *read_payload(const char *dir, const char *name, size_t *len, const char **why) {
++    char path[1024];
++    *why = "path too long";
++    int r = snprintf(path, sizeof path, "%s/%s", dir, name);
++    if (r <= 0 || (size_t)r >= sizeof path) return NULL;
++    FILE *f = fopen(path, "rb");
++    if (!f) { *why = "missing"; return NULL; }
++    if (fseek(f, 0, SEEK_END)) { *why = "unreadable"; fclose(f); return NULL; }
++    long size = ftell(f);
++    if (size <= 0) { *why = "empty"; fclose(f); return NULL; }
++    if (size > (1 << 20)) { *why = "too large"; fclose(f); return NULL; }
++    if (fseek(f, 0, SEEK_SET)) { *why = "unreadable"; fclose(f); return NULL; }
++    uint8_t *buf = malloc((size_t)size);
++    if (!buf) { *why = "out of memory"; fclose(f); return NULL; }
++    if (fread(buf, 1, (size_t)size, f) != (size_t)size) { *why = "short read"; free(buf); fclose(f); return NULL; }
++    fclose(f);
++    *len = (size_t)size;
++    return buf;
++}
++
++static void challenge_init(void) {
++    const char *on = getenv("DM_D3_CHALLENGE");
++    if (on && !strcmp(on, "0")) { LOG("d3 pubfile: challenge INFO disabled by DM_D3_CHALLENGE=0"); return; }
++    unsigned num = 0;
++    const char *snum = getenv("DM_D3_RIFT_NUM");
++    if (snum && *snum) {
++        char *end; unsigned long v = strtoul(snum, &end, 10);
++        if (end == snum || *end || v > 99) die("DM_D3_RIFT_NUM 非法：%s", snum);
++        num = (unsigned)v;
++    }
++    char dir[900];
++    if (!rift_dir(dir, sizeof dir)) { LOG("d3 pubfile: challenge INFO disabled (no rift_data directory)"); return; }
++    char weekly[32];
++    snprintf(weekly, sizeof weekly, "challengerift_%02u.dat", num);
++    size_t clen = 0, rlen = 0;
++    const char *why = NULL;
++    uint8_t *config = read_payload(dir, "challengerift_config.dat", &clen, &why);
++    if (!config) { LOG("d3 pubfile: challenge INFO disabled (challengerift_config.dat %s)", why); return; }
++    uint8_t *rift = read_payload(dir, weekly, &rlen, &why);
++    if (!rift) { free(config); LOG("d3 pubfile: challenge INFO disabled (%s %s)", weekly, why); return; }
++    // Neither block is ever freed: the guest parser keeps the text pointer for as long as it holds the message, the
++    // same contract as the seasons/blacklist payloads above. Embedded capacity (bit63) tells the guest it must not
++    // hand the pointer to the allocator, which is what makes host memory legal here.
++    const uint64_t embedded = 1ull << 63;
++    s_cr_config_str = (blz_string){(const char *)config, clen, (uint64_t)clen | embedded, {0, 0}};
++    s_cr_rift_str = (blz_string){(const char *)rift, rlen, (uint64_t)rlen | embedded, {0, 0}};
++    s_cr_off = 0;
++    LOG("d3 pubfile: challenge INFO enabled (%s, config %zu B, weekly %s %zu B)", dir, clen, weekly, rlen);
++}
 +
 +static void pubfile_init(void) {
 +    atomic_store(&s_state, PUBFILE_OFF);
@@ -2099,6 +2193,7 @@ index 0000000..31a3a81
 +    s_off = 0;
 +    LOG("d3 pubfile: INFO enabled (main %s, %.0f frames delay, seasons %zu B, blacklist %zu B)", dm_main_build(), (double)s_delay, sl, bl);
 +    atomic_store(&s_state, PUBFILE_ON);
++    challenge_init();
 +}
 +
 +static module_t *main_module(void) {
@@ -2117,6 +2212,25 @@ index 0000000..31a3a81
 +static uint64_t seasons_size(uint8_t *base) {
 +    void *vec = grab(base, OFF_SEASONS_VEC);
 +    return vec ? *(uint64_t *)((uint8_t *)vec + 8) : 0;
++}
++
++// Offline challenge-rift survey: the publisher path for challengerift_*.dat reads these three main-image
++// globals. Read-only and null-checked at every level, because the registry is torn down on reconnect.
++// The tuple (service, ready, ready & 4) only moves at lobby transitions, so the tick samples it by change
++// and report() forces one line per injection.
++static void cr_probe(uint8_t *base, int force) {
++    static int last_service = -1, last_ready = -1, last_armed = -1;
++    void *service = grab(base, OFF_CR_SERVICE);
++    void *ready = grab(base, OFF_CR_READY);
++    void *xvar = grab(base, OFF_CR_XVAR);
++    unsigned flags = ready ? *(uint8_t *)((uint8_t *)ready + 0x18) & 0xffu : 0u;
++    int has_service = service != NULL, has_ready = ready != NULL, armed = (flags & 4u) != 0;
++    if (!force && has_service == last_service && has_ready == last_ready && armed == last_armed) return;
++    if (ready)
++        LOG("d3 pubfile: cr globals service=%p ready=%p flags=%#x xvar=%p", service, ready, flags, xvar);
++    else
++        LOG("d3 pubfile: cr globals service=%p ready=%p flags=(null) xvar=%p", service, ready, xvar);
++    last_service = has_service; last_ready = has_ready; last_armed = armed;
 +}
 +
 +static void inject(uint8_t *base) {
@@ -2143,6 +2257,112 @@ index 0000000..31a3a81
 +    atomic_store(&s_injected, s_injections);
 +}
 +
++typedef int (*xvar_bool_set_fn)(void *xvar, uint32_t value, uint32_t dirty_flags);
++
++enum { CR_MESSAGE_BYTES = 0x40 };
++
++// One-shot probe of the offline challenge-rift tail. Each stage logs before it can fault, so a crash is attributable
++// to the stage after the last printed line. No destructor is ever called on the two messages: the callback may keep
++// them, and the host-visible payload text must stay alive with them.
++static void challenge_once(uint8_t *base) {
++    if (s_cr_off || s_cr_attempted) return;
++    s_cr_attempted = 1;
++    // The registry ready byte (OFF_CR_READY + 0x18) is measured 0xc6 offline but 0xc1 in a live session, so bit 0x4 is
++    // not set there and has to be written (on the resolved object, below); the XVar above is turned on for the same
++    // reason, the callback wants rifts enabled on both.
++    void *xvar = grab(base, OFF_CR_XVAR);
++    int set = xvar ? ((xvar_bool_set_fn)(base + OFF_XVAR_BOOL_SET))(xvar, 1, XVAR_DIRTY) : -1;
++    LOG("d3 pubfile: challenge xvar=%p set(1)=%d", xvar, set);
++    void *service = grab(base, OFF_CR_SERVICE);
++    uint8_t *config = calloc(1, CR_MESSAGE_BYTES), *weekly = calloc(1, CR_MESSAGE_BYTES);
++    if (!config || !weekly) {
++        LOG("d3 pubfile: challenge out of memory, giving up");
++        free(config); free(weekly);
++        return;
++    }
++    ((void (*)(void *))(base + OFF_CR_CONFIG_CTOR))(config);
++    ((void (*)(void *))(base + OFF_CR_WEEKLY_CTOR))(weekly);
++    LOG("d3 pubfile: challenge ctor config vptr=%p weekly vptr=%p", *(void **)config, *(void **)weekly);
++    parse_partial_fn parse = (parse_partial_fn)(base + OFF_CR_PARSE);
++    int pc = parse(config, &s_cr_config_str), pw = parse(weekly, &s_cr_rift_str);
++    LOG("d3 pubfile: challenge parse config=%d weekly=%d", pc, pw);
++    // The callback errors out unless start <= now < end, and the documents carry fixed dates; widen the window to the
++    // whole epoch like d3hack does instead of trusting their timestamps. challenge_number_ is kept as parsed; the
++    // window overrides also need ChallengeData._has_bits_ bit 3 at +0x10, because the callback tests that bit before
++    // it converts end from seconds to ns and silently ignores a host-written +0x30 without it.
++    *(uint8_t *)(config + 0x10) |= 0x8;
++    *(uint64_t *)(config + 0x18) = 0;
++    *(uint64_t *)(config + 0x30) = 0x7fffffff;
++    LOG("d3 pubfile: challenge number=%u orb_multiplier=%g", *(uint32_t *)(config + 0x28), (double)*(float *)(config + 0x2c));
++    uint32_t bind = 0, result = 0;
++    // Gate survey: every path that reaches the callback writes valid=1 unconditionally, so valid=0 in the result line
++    // means one of the two silent early exits was taken. The first one tests a byte on the object the registry handle
++    // *resolves to* (0x327b50 is a hash-map lookup, w1=1), not on *(0x114d998) itself, which is what cr_probe samples.
++    {
++        typedef void *(*resolve_ns_fn)(void *handle, uint32_t one);
++        typedef uint64_t (*now_ns_fn)(void);
++        typedef int64_t (*ns_to_unix_fn)(uint64_t ns);
++        void *handle = grab(base, OFF_CR_READY);
++        void *resolved = handle ? ((resolve_ns_fn)(base + OFF_CR_RESOLVE))(handle, 1) : NULL;
++        unsigned flags = resolved ? *(uint8_t *)((uint8_t *)resolved + 0x18) & 0xffu : 0u;
++        // The early exit at 0x185fd0 (tbz w8,#2) tests this byte on the resolved object, so the write has to land on
++        // that same pointer; setting it on the registry handle (what cr_probe samples) would not be seen.
++        unsigned flags_after = flags;
++        if (resolved) {
++            ((uint8_t *)resolved)[0x18] |= 0x4;
++            flags_after = *(uint8_t *)((uint8_t *)resolved + 0x18) & 0xffu;
++        }
++        if (handle)
++            LOG("d3 pubfile: challenge gate handle=%p resolved=%p same=%d flags=%#x -> %#x", handle, resolved,
++                resolved == handle, flags, flags_after);
++        else
++            LOG("d3 pubfile: challenge gate handle=%p resolved=(skipped) same=%d flags=%#x", handle, 0, flags);
++        uint64_t now = ((now_ns_fn)(base + OFF_CLOCK_NOW))();
++        int64_t unix_ns = ((ns_to_unix_fn)(base + OFF_CLOCK_UNIX))(now);
++        LOG("d3 pubfile: challenge clock now_ns=%llu now_unix=%lld (%#llx)", (unsigned long long)now, (long long)unix_ns,
++            (unsigned long long)unix_ns);
++        void *offset = grab(base, OFF_CLOCK_OFFSET);
++        if (offset)
++            LOG("d3 pubfile: challenge clock offset=%p value=%llu valid=%u", offset, (unsigned long long)*(uint64_t *)offset,
++                *(uint32_t *)((uint8_t *)offset + 8));
++        else
++            LOG("d3 pubfile: challenge clock offset=%p value=(null) valid=(null)", offset);
++    }
++    // ModeSelect Challenge Rifts row survey, all reads: the predicate chain evaluated by hand so the byte that keeps
++    // the row locked is visible before anything writes it. Null-checked at every step, because these singletons are
++    // rebuilt at lobby transitions and the setter writes above must stay attributable if the chain has moved.
++    {
++        int unlock = ((int (*)(void))(base + OFF_CR_UNLOCK))();
++        LOG("d3 pubfile: challenge unlock fn=%d", unlock);
++        void *obj = ((void *(*)(void))(base + OFF_CR_UNLOCK_OBJ))();
++        void *inner = obj ? *(void **)((uint8_t *)obj + 0x18) : NULL;
++        if (inner)
++            LOG("d3 pubfile: challenge unlock obj=%p inner=%p byte=%#x", obj, inner, *(uint8_t *)((uint8_t *)inner + 0x64));
++        else
++            LOG("d3 pubfile: challenge unlock obj=%p inner=%p byte=(null)", obj, inner);
++        void *fallback = grab(base, OFF_CR_UNLOCK_FALLBACK);
++        void *fallback_inner = fallback ? *(void **)((uint8_t *)fallback + 0x18) : NULL;
++        if (fallback_inner)
++            LOG("d3 pubfile: challenge unlock fallback=%p byte=%#x", fallback_inner, *(uint8_t *)((uint8_t *)fallback_inner + 0x64));
++        else
++            LOG("d3 pubfile: challenge unlock fallback=%p byte=(null)", fallback_inner);
++        int gamestate = ((int (*)(void))(base + OFF_CR_GAMESTATE))();
++        void *raw = grab(base, OFF_CR_GAMESTATE_RAW);
++        void *raw_inner = raw ? *(void **)raw : NULL;
++        if (raw_inner)
++            LOG("d3 pubfile: challenge gamestate value=%#x raw=%#x", (unsigned)gamestate, *(uint32_t *)((uint8_t *)raw_inner + 0x10));
++        else
++            LOG("d3 pubfile: challenge gamestate value=%#x raw=(null)", (unsigned)gamestate);
++    }
++    LOG("d3 pubfile: challenge calling callback service=%p", service);
++    ((void (*)(void *, int *, void *, void *))(base + OFF_CR_CALLBACK))(&bind, (int *)&result, config, weekly);
++    uint32_t number = *(uint32_t *)(config + 0x28);
++    if (service)
++        LOG("d3 pubfile: challenge result=%d number=%u valid=%#x", (int)result, number, *(uint32_t *)((uint8_t *)service + 0x2e0));
++    else
++        LOG("d3 pubfile: challenge result=%d number=%u valid=(no service)", (int)result, number);
++}
++
 +static void report(uint8_t *base) {
 +    void *vec = grab(base, OFF_SEASONS_VEC);
 +    uint64_t n = vec ? *(uint64_t *)((uint8_t *)vec + 8) : 0;
@@ -2156,6 +2376,7 @@ index 0000000..31a3a81
 +    LOG("d3 pubfile: seasons vec=%p n=%llu season=%u start=%llu end=%llu flags seasons=%u blacklist=%u", vec,
 +        (unsigned long long)n, (unsigned)season, (unsigned long long)start, (unsigned long long)end,
 +        fs ? (unsigned)*fs : 0u, fb ? (unsigned)*fb : 0u);
++    cr_probe(base, 1);
 +}
 +
 +// Title-bar text (front_mac.m weak-calls this). Allocation-free and safe on any thread: it only reads the
@@ -2193,6 +2414,14 @@ index 0000000..31a3a81
 +        inject(m->base);
 +        report(m->base);
 +    }
++    // Probe of the untraced challenge-rift tail: only after the seasons/blacklist pair has been handed over, and only
++    // once per session (challenge_once self-guards), because a fault here must not repeat every frame.
++    if (s_injections) challenge_once(m->base);
++    // One sample on top of the change-driven ones: state that only settles after the lobby has been up for a
++    // while would otherwise never be recorded, since the injector reports just once per injection.
++    int late = !s_cr_late && dm_guest_frame() >= s_delay + 600;
++    s_cr_late |= late;
++    cr_probe(m->base, late);
 +    atomic_store(&busy, 0);
 +}
 +
