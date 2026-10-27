@@ -1590,7 +1590,7 @@ index c925370..4dc5154 100644
  metal_macosx	Apple metal version 32023.921 (metalfe-32023.921.6)
  metal_iphoneos	Apple metal version 32023.921 (metalfe-32023.921.6)
 diff --git a/dm/host/Makefile b/dm/host/Makefile
-index 31b4420..51cec58 100644
+index 31b4420..6c2626e 100644
 --- a/dm/host/Makefile
 +++ b/dm/host/Makefile
 @@ -10,7 +10,7 @@ GAME_DIR = ../games/$(GAME)
@@ -1602,14 +1602,15 @@ index 31b4420..51cec58 100644
  # NVN null device + nn::vi (dm/gfx/)
  # Sources under dm/gfx and dm/gfx/nvn are included by wildcard (tests/ and metal/ do not go into the host): adding a file does not touch this line
  GFX=$(sort $(wildcard ../gfx/*.c ../gfx/nvn/*.c ../gfx/nvn/*.m ../gfx/nvn/*.S ../gfx/tex/*.c ../gfx/tex/*.m))
-@@ -51,5 +51,5 @@ $(GAME_STAMP): FORCE
+@@ -51,5 +51,6 @@ $(GAME_STAMP): FORCE
  	@mkdir -p gen; echo $(GAME) | cmp -s - $@ || echo $(GAME) > $@
  .PHONY: FORCE
  FORCE:
 -dmhost: $(SRC) $(GFX) dm.h hle.h dm_input.h front.h touch_mac.h ../ios/Sources/dm_touch_controls.[ch] $(GFX_H) $(GAME_H) $(GAME_DIR)/dmsh_chain.h $(GAME_STAMP) $(VPX_LIB)
 -	clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework QuartzCore -framework Metal -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers
 +dmhost: $(SRC) $(GFX) dm.h hle.h dm_input.h front.h touch_mac.h ../ios/Sources/dm_touch_controls.[ch] $(GFX_H) controller_effects.h lan_native.h dm_d3_graphics.h $(GAME_H) $(GAME_DIR)/dmsh_chain.h $(GAME_STAMP) $(VPX_LIB)
-+	clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework GameController -framework CoreHaptics -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers
++	# env -u SOURCE_DATE_EPOCH: the nix devshell exports a pinned epoch, which would freeze dm_host_build_stamp (__DATE__/__TIME__) at 1980 and hide a stale dmhost
++	env -u SOURCE_DATE_EPOCH clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework GameController -framework CoreHaptics -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers
 diff --git a/dm/host/dm_d3_graphics.h b/dm/host/dm_d3_graphics.h
 new file mode 100644
 index 0000000..c6da2da
@@ -1672,18 +1673,20 @@ index 933c85b..6dfad7a 100644
 +void dm_pad_clear(void);
 +void dm_input_clear(void);
 diff --git a/dm/host/front_mac.m b/dm/host/front_mac.m
-index c7559ca..1d426e1 100644
+index c7559ca..d71b581 100644
 --- a/dm/host/front_mac.m
 +++ b/dm/host/front_mac.m
-@@ -3,6 +3,7 @@
+@@ -3,7 +3,9 @@
  // Key map (Nintendo layout): WASD left stick, arrow keys D-pad, J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−.
  #import <Cocoa/Cocoa.h>
  #import <QuartzCore/CAMetalLayer.h>
 +#import <QuartzCore/CATransaction.h>
  #import <Metal/Metal.h>
++#import <dispatch/dispatch.h>
  #include "dm.h"
  #include "dm_input.h"
-@@ -13,14 +14,64 @@ __attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn
+ #include "dm_uiscreen.h"
+@@ -13,14 +15,77 @@ __attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn
  #include "front.h"
  #include "hle.h"
  #include <signal.h>
@@ -1692,11 +1695,24 @@ index c7559ca..1d426e1 100644
 +void dm_gamepad_start(void (*on_present)(int));
 +void dm_gamepad_set_active(int active);
 +static __weak NSWindow *g_window;
++static int g_pad_present;   // last controller state reported by the gamepad layer (main thread), replayed by dm_front_title_refresh
 +static int lang_zh(void) { const char *e = getenv("DM_LANG"); return e && (e[0] | 0x20) == 'z' && (e[1] | 0x20) == 'h'; }
++// Only D3 builds the injector (hle_d3_pubfile.c); elsewhere the symbol is absent and the field is omitted.
++extern int dm_d3_pubfile_status(char *buf, size_t n) __attribute__((weak));
 +static void pad_status(int present) {
-+    g_window.title = [NSString stringWithFormat:@"%s · %@", DM_GAME_NAME, lang_zh() ? (present ? @"手柄已连接" : @"等待手柄（键盘可用）")
-+                                                                                   : (present ? @"Controller connected" : @"Waiting for controller (keyboard works)")];
++    g_pad_present = present;
++    const char *wait = lang_zh() ? (present ? "手柄已连接" : "等待手柄（键盘可用）")
++                                 : (present ? "Controller connected" : "Waiting for controller (keyboard works)");
++    const char *build = dm_main_build();
++    char rewrite[9] = "", injector[96] = "", title[256];
++    if (build) for (size_t i = 0; i < 8 && build[i]; i++) { rewrite[i] = build[i]; rewrite[i + 1] = 0; }
++    if (dm_d3_pubfile_status) dm_d3_pubfile_status(injector, sizeof injector);
++    snprintf(title, sizeof title, "%s · %s · %s%s%s%s%s", DM_GAME_NAME, wait, dm_host_build_stamp(),
++             rewrite[0] ? " · " : "", rewrite, injector[0] ? " · " : "", injector);
++    g_window.title = [NSString stringWithUTF8String:title];
 +}
++// The injector learns its result only after the first guest tick, long after the title is set: replay it on the main thread.
++void dm_front_title_refresh(void) { dispatch_async(dispatch_get_main_queue(), ^{ if (g_window) pad_status(g_pad_present); }); }
 +static void install_main_menu(void) {
 +    NSString *name = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
 +    if (!name.length) name = NSProcessInfo.processInfo.processName;
@@ -1748,7 +1764,7 @@ index c7559ca..1d426e1 100644
      unsigned w, h; const char *e = getenv("DM_GAME_RES");
      if (e && sscanf(e, "%ux%u", &w, &h) == 2) return docked ? (uint64_t)h << 32 | w : (uint64_t)(h * 4 / 5) << 32 | (w * 4 / 5 + 3) / 4 * 4;
      return docked ? 900ull << 32 | 1600 : 720ull << 32 | 1280;
-@@ -60,23 +111,34 @@ void front_run(void (*guest)(void)) {
+@@ -60,23 +125,34 @@ void front_run(void (*guest)(void)) {
      @autoreleasepool {
          [NSApplication sharedApplication];
          [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -1786,7 +1802,7 @@ index c7559ca..1d426e1 100644
              if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
              return nil;   // Swallow it to avoid the system beep
          }];
-@@ -93,14 +155,15 @@ void front_run(void (*guest)(void)) {
+@@ -93,14 +169,15 @@ void front_run(void (*guest)(void)) {
                                                        usingBlock:^(NSNotification *n) { (void)n; exit(0); }];
          // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1)
          NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -1807,7 +1823,7 @@ index c7559ca..1d426e1 100644
      }
  }
 diff --git a/dm/host/hle.c b/dm/host/hle.c
-index 1a63bd7..9fcffec 100644
+index 1a63bd7..266bad2 100644
 --- a/dm/host/hle.c
 +++ b/dm/host/hle.c
 @@ -17,6 +17,7 @@ extern uint64_t unimpl_stubs[MAX_STUB];   // 8 bytes per stub
@@ -1818,7 +1834,7 @@ index 1a63bd7..9fcffec 100644
      return 0;
  }
  
-@@ -42,6 +43,16 @@ uint64_t resolve_import(module_t *m, const char *name) {
+@@ -42,8 +43,21 @@ uint64_t resolve_import(module_t *m, const char *name) {
      return (uint64_t)hlecount_wrap("STUB", name, (void *)&unimpl_stubs[k]);
  }
  
@@ -1834,12 +1850,25 @@ index 1a63bd7..9fcffec 100644
 +
  void stubs_report(void) { LOG("stubs=%u", g_nstub); }
  
++// Compile-time stamp of this host binary (the window title in front_mac.m shows it so a stale dmhost is visible).
++const char *dm_host_build_stamp(void) { return __DATE__ " " __TIME__; }
++
  // ---------- Host gate dispatch ----------
+ // The rewriter replaces every svc #n / mrs cntpct with a call to dm_gate; here we remember, by gate block return point (absolute address), what it originally was.
+ // Lookup: open-addressing hash, one hit (it used to do module_of + a linear compare over 110 entries on every gate call, keyed by in-module offset, which would collide across modules).
 diff --git a/dm/host/hle.h b/dm/host/hle.h
-index 79fda3d..bb8a80f 100644
+index 79fda3d..4f4f319 100644
 --- a/dm/host/hle.h
 +++ b/dm/host/hle.h
-@@ -77,4 +77,7 @@ uint64_t dm_audio_render_calls(void);   // Cumulative sound card callback count
+@@ -18,6 +18,7 @@ void *objmap_get(const void *guest);
+ void objmap_put(const void *guest, void *host);
+ void *objmap_del(const void *guest);
+ uint64_t now_ns(void);
++const char *dm_host_build_stamp(void);   // __DATE__ " " __TIME__ of this host build (title bar)
+ // This thread is doing the host's own heavy work (NVN submit / present: encoding Metal commands; on hardware that is the GPU's business and does not occupy a guest core). The same-core preemption approximation (hle_thread.c) does not count it as "running"
+ extern __thread _Atomic int dm_host_work;
+ uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while DM_TICK_HOLD is frozen)
+@@ -77,4 +78,7 @@ uint64_t dm_audio_render_calls(void);   // Cumulative sound card callback count
  //   0x8c   Current act saved while in a rift (when the character is in a rift map w9 is replaced with 4 = Act V, writes x9; x8 always 0) dm_rift.c      0x6fa9d0 (branch gate: x8≠0 jumps to 0x6fa9d4, otherwise executes the original instruction and returns to 0x6fa9d4)
  //   0x8d   Extra mercenary equipment slots (mercenary + rift level ≥10 + belt / boots / gloves / ring / amulet: w0 is replaced with 1, writes x0; x8 always 0) dm_rift.c      0x64a34c (branch gate: x8≠0 jumps to 0x64a350, otherwise executes the original instruction and returns to 0x64a350)
  //   0x8e   Client-side check for the extra mercenary equipment slots (rift level ≥10 + the item is a belt / boots / gloves / ring / amulet: w1 is replaced with the item's own type number, writes x1; x8 always 0) dm_rift.c      0x3beb58 (branch gate: x8≠0 jumps to 0x3beb5c, otherwise executes the original instruction and returns to 0x3beb5c)
@@ -1935,10 +1964,10 @@ index 3d309a1..ec44a2c 100644
 +}
 diff --git a/dm/host/hle_d3_pubfile.c b/dm/host/hle_d3_pubfile.c
 new file mode 100644
-index 0000000..23023f3
+index 0000000..31a3a81
 --- /dev/null
 +++ b/dm/host/hle_d3_pubfile.c
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,229 @@
 +/* Diablo III offline publisher files: hand Seasons.txt / Blacklist.txt to the game's own lobby callbacks.
 + *
 + * The game fetches both files from the online service; with no service the season calendar stays empty and the
@@ -1959,18 +1988,26 @@ index 0000000..23023f3
 +// Payloads carry no season data of their own: the game only needs the calendar and the (empty) item blacklist.
 +// Byte-for-byte the strings d3hack synthesises (god-jester/d3hack, source/program/d3/hooks/season_events.hpp);
 +// the trailing blank line belongs to the seasons document format.
++// The guest parses these dates into its own epoch, which is 946,684,800 s (30 years) behind the text:
++// measured, text 2025-02-09 00:00 is stored as 1995-02-10 00:00, text 2036-02-09 01:00 as 2006-02-09 01:00.
++// The years below are therefore written +30 so the season window lands on 2025-02-09 .. 2036-02-09 once the
++// guest has re-based them; without the offset the UI sees a season that ended in 2006.
++// A time of exactly 00:00:00 also loses a day in the round trip (see the 1995-02-10 above), which is why the end
++// keeps 01:00:00 instead of midnight.
 +static const char k_seasons_text[] =
 +    "# Format for dates MUST be: \" ? ? ? , DD MMM YYYY hh : mm:ss UTC\"\n"
 +    "# The Day of Month(DD) MUST be 2 - digit; use either preceding zero or trailing space\n"
 +    "[Season 37]\n"
-+    "Start \"Sat, 09 Feb 2025 00:00:00 GMT\"\n"
-+    "End \"Tue, 09 Feb 2036 01:00:00 GMT\"\n\n";
++    "Start \"Sat, 09 Feb 2055 00:00:00 GMT\"\n"
++    "End \"Tue, 09 Feb 2066 01:00:00 GMT\"\n\n";
 +static const char k_blacklist_text[] =
 +    "# Blacklist overridden by d3hack\n"
 +    "[GBID]\n\n"
 +    "[SNO]\n";
 +#define SEASONS_BYTES 239u
 +#define BLACKLIST_BYTES 47u
++_Static_assert(sizeof(k_seasons_text) - 1 == SEASONS_BYTES, "k_seasons_text length vs SEASONS_BYTES");
++_Static_assert(sizeof(k_blacklist_text) - 1 == BLACKLIST_BYTES, "k_blacklist_text length vs BLACKLIST_BYTES");
 +
 +// blz::string is 0x28 bytes: text, size, capacity-with-flags, then inline SSO scratch. The engine reads these
 +// fields directly (no accessor on the retrieval path), so the layout is reproduced here.
@@ -1993,8 +2030,16 @@ index 0000000..23023f3
 +    OFF_LOBBY_B        = 0x114b128,
 +    OFF_BLACKLIST_CB   = 0x657f0,     // OnBlacklistFileRetrieved(self, eResult, shared_ptr<blz::string> *)
 +    OFF_SEASONS_CB     = 0x65270,     // OnSeasonsFileRetrieved(self, eResult, shared_ptr<blz::string> *)
++    // bool XVarUint32_Set(XVarUint32 *this, uint32 value, uint32 dirty_flags). 2.7.6 0xa272c0 → 2.7.7 by
++    // nso_fnmap.py (containing function identical after address masking, +0x100 like the rest of the region).
++    // 2.7.7 0xa273c0 stores value inline at this+0xb0 (ldaxr/stlxr) and notifies observers at this+0xa8.
++    OFF_XVAR_SET       = 0xa273c0,
 +};
 +enum { MAX_INJECTIONS = 8 };
++// Season values d3hack writes (patches.cpp: XVarUint32_Set(&g_varSeasonNum, 37, 3) / &g_varSeasonState, 1, 3).
++enum { SEASON_NUM = 37, SEASON_STATE = 1, XVAR_DIRTY = 3 };
++
++typedef int (*xvar_uint32_set_fn)(void *xvar, uint32_t value, uint32_t dirty_flags);
 +
 +static blz_string *s_seasons, *s_blacklist;
 +static blz_shared_ptr *s_sp_seasons, *s_sp_blacklist;
@@ -2002,8 +2047,15 @@ index 0000000..23023f3
 +static uint64_t s_delay = 600;             // the lobby is not up before the front end; injecting earlier just hits null globals
 +static unsigned s_injections;
 +static pthread_once_t s_once = PTHREAD_ONCE_INIT;
++// Title-bar status (dm_d3_pubfile_status): written by the guest thread, read by the AppKit main thread.
++enum { PUBFILE_PENDING, PUBFILE_OFF, PUBFILE_ON };
++static _Atomic int s_state = PUBFILE_PENDING;   // PENDING until pubfile_init has decided
++static _Atomic int s_vec_seasons;               // seasons vector non-empty as of the last report
++static _Atomic unsigned s_injected;             // mirror of s_injections for the reader
++static _Atomic int s_set_num = -1, s_set_state = -1;   // XVar setter return values (-1 = not called)
 +
 +static void pubfile_init(void) {
++    atomic_store(&s_state, PUBFILE_OFF);
 +    const char *on = getenv("DM_D3_PUBFILE");
 +    if (on && !strcmp(on, "0")) { LOG("d3 pubfile: INFO disabled by DM_D3_PUBFILE=0"); return; }
 +    const char *d = getenv("DM_D3_PUBFILE_DELAY");
@@ -2046,6 +2098,7 @@ index 0000000..23023f3
 +    s_sp_blacklist->pointer = s_blacklist; s_sp_blacklist->manager = NULL;
 +    s_off = 0;
 +    LOG("d3 pubfile: INFO enabled (main %s, %.0f frames delay, seasons %zu B, blacklist %zu B)", dm_main_build(), (double)s_delay, sl, bl);
++    atomic_store(&s_state, PUBFILE_ON);
 +}
 +
 +static module_t *main_module(void) {
@@ -2074,7 +2127,20 @@ index 0000000..23023f3
 +    // cbz before its prologue; 3 is the network failure result and would return without parsing).
 +    ((void (*)(void *, int, void *))(base + OFF_BLACKLIST_CB))(NULL, 0, s_sp_blacklist);
 +    ((void (*)(void *, int, void *))(base + OFF_SEASONS_CB))(NULL, 0, s_sp_seasons);
++    // The retrieval tail (0x5ff20) recomputes the active-season state and pushes it through these same XVars,
++    // so the override has to land after it. The globals hold the XVar objects themselves: the getters
++    // 0x72e090/0x72e0a0 load them and tail-call XVarUint32_Get 0xa27470 (ldar [x0+0xb0]), and the tail at
++    // 0x600ac calls this setter with the loaded pointer in x0 and dirty flags 3. s_off only clears after the
++    // build-id/svc-gate checks in pubfile_init, so this runs on the surveyed image only.
++    void *num = grab(base, OFF_SEASONS_XVAR), *state = grab(base, OFF_ONLINE_XVAR);
++    xvar_uint32_set_fn set = (xvar_uint32_set_fn)(base + OFF_XVAR_SET);
++    int rn = num ? set(num, SEASON_NUM, XVAR_DIRTY) : -1;
++    int rs = state ? set(state, SEASON_STATE, XVAR_DIRTY) : -1;
++    atomic_store(&s_set_num, rn);
++    atomic_store(&s_set_state, rs);
++    LOG("d3 pubfile: xvar num=%p state=%p set(num)=%d set(state)=%d", num, state, rn, rs);
 +    s_injections++;
++    atomic_store(&s_injected, s_injections);
 +}
 +
 +static void report(uint8_t *base) {
@@ -2086,9 +2152,25 @@ index 0000000..23023f3
 +    uint64_t end = data ? *(uint64_t *)((uint8_t *)data + 0x18) : 0;
 +    uint8_t *fs = *(uint8_t **)(base + OFF_SEASONS_PARSED);
 +    uint8_t *fb = *(uint8_t **)(base + OFF_BLACKLIST_FLAG);
++    atomic_store(&s_vec_seasons, n ? 1 : 0);
 +    LOG("d3 pubfile: seasons vec=%p n=%llu season=%u start=%llu end=%llu flags seasons=%u blacklist=%u", vec,
 +        (unsigned long long)n, (unsigned)season, (unsigned long long)start, (unsigned long long)end,
 +        fs ? (unsigned)*fs : 0u, fb ? (unsigned)*fb : 0u);
++}
++
++// Title-bar text (front_mac.m weak-calls this). Allocation-free and safe on any thread: it only reads the
++// numbers stored above. Returns 0 when the injector is off for this build (the caller then omits the field).
++int dm_d3_pubfile_status(char *buf, size_t n) {
++    if (!buf || n < 32) return 0;
++    int state = atomic_load(&s_state);
++    if (state == PUBFILE_OFF) return 0;
++    if (state == PUBFILE_PENDING || !atomic_load(&s_injected)) {
++        snprintf(buf, n, "injector idle");
++        return 1;
++    }
++    snprintf(buf, n, "season %d injected (vec=%d, xvar=%d/%d)", SEASON_NUM, atomic_load(&s_vec_seasons),
++             atomic_load(&s_set_num) == 1, atomic_load(&s_set_state) == 1);
++    return 1;
 +}
 +
 +void dm_d3_pubfile_tick(void) {
@@ -2101,6 +2183,8 @@ index 0000000..23023f3
 +    if (!s_injections) {
 +        inject(m->base);
 +        report(m->base);
++        // The title was set before the first tick; re-render it once the injector has a result.
++        { extern void dm_front_title_refresh(void) __attribute__((weak)); if (dm_front_title_refresh) dm_front_title_refresh(); }
 +    } else if (!seasons_size(m->base) && s_injections < MAX_INJECTIONS) {
 +        // The lobby is torn down and rebuilt on reconnect / character switch (main+0x72f7c clears the calendar).
 +        // Without re-arming, the Journey disappears for the rest of the session; the cap keeps a pathological
