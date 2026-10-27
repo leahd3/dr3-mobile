@@ -1,3 +1,12 @@
+# Local development status — 2026-10-27
+
+Offline season content:
+- The offline lobby never issues the publisher fetch, so the host now calls the game's own callbacks with the documents it would have downloaded: Seasons and Blacklist (branches gated observe-only first, then seeded), the season XVars pair, and the weekly challenge-rift payload read from `work/rift_data`. A 90 s run reports season vector size 1, season 37, seasons/blacklist flags 1; the challenge call publishes `valid=1, number 346` while Continue loads the hero and commits the save. Derivation recorded in docs/UPSTREAM_CHANGES.md; the d3hack reference checkout is no longer distributed.
+- The Challenge Rifts row now appears in Game Settings → Mode Select but stays locked until a Greater Rift is cleared, so **rift entry is not verified**. `Config.txt` is not injected because that callback dereferences `self`.
+- Two earlier approaches were removed after measurement: writing bit `0x4` into the resolved service object made the front end believe an online session existed and stalled main-menu Continue; d3hack's spawn gate (site 10) made every hero hang on world entry.
+- A third display mode (Wider 1920×720) and the raised wide profile ship with per-mode patched images that are verified against the requested mode's word table. MSAA logging shows 2.7.7 never calls `nvnTextureBuilderSetSamples`: every texture and the swapchain is single-sample.
+- Synthetic state: 58 Python tests discovered, 52 executed and 6 opt-in (Bonjour/LAN) skipped, plus the native Metal/GameController suite from `make test`. `tools/audit_public.py --all-history` passes on the published tree.
+
 # Local development status — 2026-10-18
 
 Public source snapshot:
@@ -31,7 +40,7 @@ Target: Diablo III Eternal Collection, base title 01001B300B9BE000, update 2.7.7
 
 Latest integration (2026-10-17, local Apple Silicon):
 - Candidate: `work/macapp-complete/DR3 Mobile.app`, runtime `fcffb365d4d29c767abd2378a11ee1042c0e25682374e4c04fec1bd404131749`. Old baseline/candidate apps remain separate. Uniform forwarding and targeted attachment guard stay on.
-- Final packaging also enables forwarding from startup in both Mac app and CLI; launcher source/binary hashes are in the app receipt. The app was repackaged and signature-verified without launching a game window. The 39 Python tests passed again; the tested native runtime and shader chain are unchanged.
+- Final packaging also enables forwarding from startup in both Mac app and CLI; launcher source/binary hashes are in the app receipt. The app was repackaged and signature-verified without launching a game window. The Python tests passed again (39 at the time; 58 are discovered now); the tested native runtime and shader chain are unchanged.
 - Production CopyCommands and GPU synchronization are implemented and SDK 8.2 semantics checked. New integration fixture: 64/64; upstream GPU fixture: 64/64; GPU validation rerun passed. Normalized vertex input failures fixed with actual-format fetch shims, 9 prebuilt layouts, 544 hash-bound source records, 128 independently expected GPU register channels and three real PSO positive/negative controls.
 - Strict CPK decoding now verifies 51/51 archives, 1,386,014 sectors and stored-payload CRC. Original 1569 SHD bytes match. A fresh exact-runtime registry audit reports 314 implemented NVN entries / 16 no-ops / 206 unregistered, with 129 observed APIs and no observed no-op or unregistered calls in the integrated town run. Unobserved is not unused.
 - Integrated offscreen town: 110 seconds, 5912 frames, graceful exit 0, no CRASH/FATAL/red warning, original save unchanged. Last 30 seconds: 442 draws / 56 passes / one attachment boundary, GPU p50 3.959 ms, p95 5.035 ms. These are offscreen work times, not foreground FPS or the original blue-lantern visual acceptance.

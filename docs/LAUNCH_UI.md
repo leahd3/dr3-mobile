@@ -20,9 +20,9 @@ Mac 是上述原生设置界面的 AppKit 适配，继续沿用左侧游戏身�
 
 - 使用真实 `NSWindow`、`NSBox`、`NSSegmentedControl`、原生 checkbox 与圆角开始按钮；窗口、分组表面和控件状态交由 AppKit 绘制。自建文字使用 `labelColor`／`secondaryLabelColor`，不把深色截图中的采样色写成固定色值。
 - 标题使用系统字体 28 pt semibold，说明与状态使用系统字体 12 pt；分组标题与控件文字沿用 AppKit 默认排印。窗口初始内容区为 760×470 pt，最小内容区为 700×450 pt；左右边距 28 pt、上边距 28 pt、底部至少 24 pt，左栏宽 240 pt，栏间距 30 pt。左栏间距 16 pt，右侧分组间距 14 pt，分组内部间距 8 pt。最小尺寸和大字号下的实际布局尚未独立截图验收。
-- 新的偏好域默认选择正常 16:9，Metal HUD、MetalFX 超分与本地 Wi-Fi 联机默认开启。正常／宽屏和三个开关立即保存至 `NSUserDefaults`；重新打开启动器可重新选择。宽屏选项依赖包内独立的 `rewrite-wide` 映像，打包时检查其配置与独立验证结果；资源缺失时该分段不可选并回到正常模式。
+- 新的偏好域默认选择正常 16:9，Metal HUD、MetalFX 超分与本地 Wi-Fi 联机默认开启。画面模式分为 `Normal` / `Wide` / `Wider` 三段，保存为 `LaunchDisplayMode`（`"normal" | "wide" | "wider"`）；旧 `LaunchWide` 布尔只在缺少新键时迁移（true → `wide`，false 或缺失 → `normal`）。两个 patched 分段分别依赖包内 `rewrite-wide` 与 `rewrite-wider` 映像；打包时各自检查配置与独立验证结果，目录缺失时该分段不可选，选择也会回退到正常模式。三个开关同样立即保存至 `NSUserDefaults`。
 - 玩家选择后点击“开始游戏”（Return 快捷键）才启动游戏。启动器先设置本次画面、HUD、MetalFX 与 LAN 环境，再以 `execv` 执行新的 host 进程；重复开始受保护。源码为启动失败提供原生 `NSAlert` 并恢复开始按钮，但错误状态外观尚未截图验证。
-- 正常模式说明为 1280×720、原版 16:9 视野；宽屏说明为 1920×720、扩大左右视野。MetalFX 开关会切换“超分至 2K”或“直接适配窗口”的辅助文字。`third_party/nxnative/dm/host/front_mac.m` 按所选画面比例居中显示，在窗口尺寸或 backing scale 改变时重新计算画面区域，允许留边；MetalFX 的输出目标为正常 2560×1440／宽屏 2560×960。这是源码中的显示契约，完整窗口调整与性能验收另行记录。
+- 正常模式说明为 1600×900、原版 16:9 视野；宽屏说明为 1568×720；超宽屏说明为 1920×720，均扩大左右视野。MetalFX 开关会切换“超分至 2K”或“直接适配窗口”的辅助文字。`third_party/nxnative/dm/host/front_mac.m` 按所选画面比例居中显示，窗口默认尺寸由该比例推导，在窗口尺寸或 backing scale 改变时重新计算画面区域，允许留边；MetalFX 的输出目标为正常 2560×1440／宽屏 2560×1176／超宽屏 2560×960。这是源码中的显示契约，完整窗口调整与性能验收另行记录。
 - 常规包使用本机原有 `work/run/save`，界面显示“存档：本机游戏进度”。私有 `tools/mac_app.py --test-session <目录>` 将既有独立存档副本路径写入 bundle 的 `DR3TestSessionRoot`，启动器显示“存档：联机测试副本”；测试包的该标记不代表常规包改用了副本。
 
 当前有效截图是 `.impeccable/review/mac-launcher/desktop.png`（1520×1004），来自实际 AppKit 启动器的系统深色外观，可确认两栏、三个设置分组、宽屏选择、开启的图形／LAN 开关与测试存档标记均可读。早期 `initial-layout.png` 是已被替换的压缩布局，不作为当前界面依据。`.impeccable/review/mac-launcher/finish-review.json` 的 `ship` 只覆盖 Mac 启动器 UI；本次另有宽屏选择持久化及 MetalFX 关闭／开启辅助文字的运行检查。浅色外观、其他语言、大字号、辅助功能遍历和错误状态外观仍未验收。

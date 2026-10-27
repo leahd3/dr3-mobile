@@ -1682,39 +1682,75 @@ index 31b4420..6c2626e 100644
 +	env -u SOURCE_DATE_EPOCH clang $(CFLAGS) -I../gfx/nvn/include -I$(dir $(GAME_H)) -I$(GAME_DIR) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework GameController -framework CoreHaptics -framework QuartzCore -framework Metal -framework MetalFX -framework AudioToolbox -framework ImageIO -framework UniformTypeIdentifiers
 diff --git a/dm/host/dm_d3_graphics.h b/dm/host/dm_d3_graphics.h
 new file mode 100644
-index 0000000..fe7203b
+index 0000000..e201e21
 --- /dev/null
 +++ b/dm/host/dm_d3_graphics.h
-@@ -0,0 +1,35 @@
-+// D3 exact-build signed-image selection. No executable bytes are written.
+@@ -0,0 +1,71 @@
++// D3 exact-build signed-image selection and per-size word guards. No executable bytes are written.
 +#pragma once
 +#include <stdint.h>
 +#include <stddef.h>
 +#include <string.h>
++
 +#define DM_D3_MAIN_BUILD_ID "2607a74f5df7754cc0357b5df7e49693"
++// Mac exposes both patched sizes; iOS keeps its single 1920x720 image and calls it "wide".
++#define DM_D3_WIDE_WIDTH 1568
++#define DM_D3_WIDER_WIDTH 1920
++
 +static inline const char *dm_d3_graphics_image(const char *mode,const char *module,const char *build_id) {
 +    if(!module)return NULL;
 +    if(strcmp(module,"main"))return module;
 +    if(!mode||!strcmp(mode,"normal"))return module;
-+    if(strcmp(mode,"wide")||!build_id||strcmp(build_id,DM_D3_MAIN_BUILD_ID))return NULL;
++    if((strcmp(mode,"wide")&&strcmp(mode,"wider"))||!build_id||strcmp(build_id,DM_D3_MAIN_BUILD_ID))return NULL;
 +    return "mainwide";
 +}
-+static inline int dm_d3_wide_text_valid(const uint8_t *text,size_t length) {
-+    // Fixed packaged profile: 1920x720 in both modes, aspect 8/3, authored
-+    // 16:9 constraint predicate disabled. This is not a generic image patcher.
-+    static const struct { size_t offset;uint32_t word; } expected[]={
-+        // Words emitted by sites(1920,720) over the verified rewrite, not hand-encoded.
-+        {0xe7858,0xd280f008},{0xe785c,0xd280f009},
-+        {0xe7860,0xf2c05a08},{0xe7864,0xf2c05a09},
-+        {0xe7868,0x5295556a},{0xe786c,0x72a8054a},
-+        {0xe7870,0xb90012ca},{0xe7874,0xa90026c8},
-+        {0xebb48,0x1e2e1001},
-+        {0x29b480,0x52800000},{0x29b484,0xd65f03c0},
-+        {0x29b7e8,0x1e2a1802},{0x29b854,0x1e211881},
-+        {0x29b914,0xbd000000},{0x29b918,0x1e211840},{0x29b91c,0xbd001400},
-+    };
++
++static inline int dm_d3_graphics_mode_width(const char *mode) {
++    if(!mode||!strcmp(mode,"normal"))return 0;
++    if(!strcmp(mode,"wide"))return DM_D3_WIDE_WIDTH;
++    if(!strcmp(mode,"wider"))return DM_D3_WIDER_WIDTH;
++    return -1;
++}
++
++static inline const char *dm_d3_graphics_ios_mode(const char *mode) {
++    // iOS packages only the 1920x720 patched image, so its launch menu's "wide" is the wider table.
++    return mode&&!strcmp(mode,"wide")?"wider":mode;
++}
++
++struct dm_d3_graphics_word { size_t offset;uint32_t word; };
++
++static const struct dm_d3_graphics_word dm_d3_wide_words[]={
++    // Words emitted by sites(1568,720) over the verified rewrite, not hand-encoded.
++    {0xe7858,0xd280c408},{0xe785c,0xd280c409},
++    {0xe7860,0xf2c05a08},{0xe7864,0xf2c05a09},
++    {0xe7868,0x528c16ca},{0xe786c,0x72a8016a},
++    {0xe7870,0xb90012ca},{0xe7874,0xa90026c8},
++    {0xebb48,0x1e2e1001},
++    {0x29b480,0x52800000},{0x29b484,0xd65f03c0},
++    {0x29b7e8,0x1e2a1802},{0x29b854,0x1e211881},
++    {0x29b914,0xbd000000},{0x29b918,0x1e211840},{0x29b91c,0xbd001400},
++};
++static const struct dm_d3_graphics_word dm_d3_wider_words[]={
++    // Words emitted by sites(1920,720) over the verified rewrite, not hand-encoded.
++    {0xe7858,0xd280f008},{0xe785c,0xd280f009},
++    {0xe7860,0xf2c05a08},{0xe7864,0xf2c05a09},
++    {0xe7868,0x5295556a},{0xe786c,0x72a8054a},
++    {0xe7870,0xb90012ca},{0xe7874,0xa90026c8},
++    {0xebb48,0x1e2e1001},
++    {0x29b480,0x52800000},{0x29b484,0xd65f03c0},
++    {0x29b7e8,0x1e2a1802},{0x29b854,0x1e211881},
++    {0x29b914,0xbd000000},{0x29b918,0x1e211840},{0x29b91c,0xbd001400},
++};
++
++static inline int dm_d3_graphics_text_valid(const char *mode,const uint8_t *text,size_t length) {
++    int width=dm_d3_graphics_mode_width(mode);
++    if(width<0)return 0;
++    if(width==0)return 1;   // original image: there are no patched words to check
 +    if(!text)return 0;
-+    for(size_t i=0;i<sizeof expected/sizeof expected[0];i++) {
++    const struct dm_d3_graphics_word *expected=width==DM_D3_WIDE_WIDTH?dm_d3_wide_words:dm_d3_wider_words;
++    size_t count=width==DM_D3_WIDE_WIDTH?sizeof dm_d3_wide_words/sizeof dm_d3_wide_words[0]
++                                        :sizeof dm_d3_wider_words/sizeof dm_d3_wider_words[0];
++    for(size_t i=0;i<count;i++) {
 +        if(expected[i].offset>length||length-expected[i].offset<4)return 0;
 +        uint32_t word;memcpy(&word,text+expected[i].offset,4);
 +        if(word!=expected[i].word)return 0;
@@ -1743,7 +1779,7 @@ index 933c85b..6dfad7a 100644
 +void dm_pad_clear(void);
 +void dm_input_clear(void);
 diff --git a/dm/host/front_mac.m b/dm/host/front_mac.m
-index c7559ca..d71b581 100644
+index c7559ca..177f23e 100644
 --- a/dm/host/front_mac.m
 +++ b/dm/host/front_mac.m
 @@ -3,7 +3,9 @@
@@ -1756,7 +1792,7 @@ index c7559ca..d71b581 100644
  #include "dm.h"
  #include "dm_input.h"
  #include "dm_uiscreen.h"
-@@ -13,14 +15,77 @@ __attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn
+@@ -13,14 +15,83 @@ __attribute__((constructor)) static void ui_shift_reg(void) { mtl_set_ui_rect_fn
  #include "front.h"
  #include "hle.h"
  #include <signal.h>
@@ -1804,16 +1840,21 @@ index c7559ca..d71b581 100644
  static uint64_t g_btn;
  static int g_w, g_a, g_s, g_d;
  
++typedef struct { int patched;double aspect;double drawable_height;uint64_t game_width; } display_mode;
++static display_mode configured_mode(void) {
++    const char *mode=getenv("DM_MAC_DISPLAY_MODE");
++    if(mode&&!strcmp(mode,"wide"))return (display_mode){1,1568.0/720.0,1176,1568};
++    if(mode&&!strcmp(mode,"wider"))return (display_mode){1,1920.0/720.0,960,1920};
++    return (display_mode){0,16.0/9.0,1440,1600};
++}
 +static int configured_display(void) {
 +    const char *mode=getenv("DM_MAC_DISPLAY_MODE");
-+    return mode&&(!strcmp(mode,"normal")||!strcmp(mode,"wide"));
-+}
-+static int configured_wide(void) {
-+    const char *mode=getenv("DM_MAC_DISPLAY_MODE");return mode&&!strcmp(mode,"wide");
++    return mode&&(!strcmp(mode,"normal")||!strcmp(mode,"wide")||!strcmp(mode,"wider"));
 +}
 +static void update_game_layer(NSView *view,NSWindow *window) {
 +    if(!configured_display())return;
-+    double aspect=configured_wide()?1920.0/720.0:16.0/9.0;
++    display_mode mode=configured_mode();
++    double aspect=mode.aspect;
 +    CGRect bounds=view.bounds,frame=bounds;
 +    if(bounds.size.height<=0||bounds.size.width<=0)return;
 +    if(bounds.size.width/bounds.size.height>aspect)frame.size.width=bounds.size.height*aspect;
@@ -1822,7 +1863,7 @@ index c7559ca..d71b581 100644
 +    [CATransaction begin];[CATransaction setDisableActions:YES];g_layer.frame=frame;
 +    g_layer.contentsScale=window.backingScaleFactor;
 +    const char *fx=getenv("DM_METALFX");
-+    g_layer.drawableSize=fx&&!strcmp(fx,"spatial")?CGSizeMake(2560,configured_wide()?960:1440):
++    g_layer.drawableSize=fx&&!strcmp(fx,"spatial")?CGSizeMake(2560,mode.drawable_height):
 +        CGSizeMake(round(frame.size.width*g_layer.contentsScale),round(frame.size.height*g_layer.contentsScale));
 +    [CATransaction commit];
 +}
@@ -1830,16 +1871,18 @@ index c7559ca..d71b581 100644
  void *front_metal_layer(void) { return (__bridge void *)g_layer; }
  // The original game's 16:9 constants, behavior unchanged; DM_GAME_RES=<width>x<height> (docked mode; handheld scaled by 720/900) is only for side-by-side comparison with iOS widescreen
  uint64_t front_game_res(int docked) {
-+    if(configured_wide())return 720ull<<32|1920;
++    display_mode mode=configured_mode();
++    if(mode.patched)return 720ull<<32|mode.game_width;
      unsigned w, h; const char *e = getenv("DM_GAME_RES");
      if (e && sscanf(e, "%ux%u", &w, &h) == 2) return docked ? (uint64_t)h << 32 | w : (uint64_t)(h * 4 / 5) << 32 | (w * 4 / 5 + 3) / 4 * 4;
      return docked ? 900ull << 32 | 1600 : 720ull << 32 | 1280;
-@@ -60,23 +125,34 @@ void front_run(void (*guest)(void)) {
+@@ -60,23 +131,35 @@ void front_run(void (*guest)(void)) {
      @autoreleasepool {
          [NSApplication sharedApplication];
          [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 -        NSRect r = NSMakeRect(0, 0, 1280, 720);
-+        NSRect r = NSMakeRect(0, 0, 1280, configured_wide()?480:720);
++        display_mode mode=configured_mode();
++        NSRect r = NSMakeRect(0, 0, 1280, round(1280/mode.aspect));
          NSWindow *win = [[NSWindow alloc] initWithContentRect:r
                                                      styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                        backing:NSBackingStoreBuffered defer:NO];
@@ -1856,7 +1899,7 @@ index c7559ca..d71b581 100644
 -        v.layer = g_layer;
 +        if(configured_display()) {
 +            v.layer=[CALayer layer];v.layer.backgroundColor=NSColor.blackColor.CGColor;[v.layer addSublayer:g_layer];
-+            win.contentAspectRatio=NSMakeSize(configured_wide()?1920:1280,720);win.contentMinSize=NSMakeSize(640,configured_wide()?240:360);
++            win.contentAspectRatio=NSMakeSize(mode.patched?(CGFloat)mode.game_width:1280,720);win.contentMinSize=NSMakeSize(640,round(640/mode.aspect));
 +            v.postsFrameChangedNotifications=YES;update_game_layer(v,win);
 +            [NSNotificationCenter.defaultCenter addObserverForName:NSViewFrameDidChangeNotification object:v queue:nil
 +                usingBlock:^(NSNotification *n){(void)n;update_game_layer(v,win);}];
@@ -1872,7 +1915,7 @@ index c7559ca..d71b581 100644
              if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
              return nil;   // Swallow it to avoid the system beep
          }];
-@@ -93,14 +169,15 @@ void front_run(void (*guest)(void)) {
+@@ -93,14 +176,15 @@ void front_run(void (*guest)(void)) {
                                                        usingBlock:^(NSNotification *n) { (void)n; exit(0); }];
          // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1)
          NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
@@ -3736,10 +3779,20 @@ index 0000000..00d42c8
 +void dm_lan_freeaddrinfo(void *);
 +void *dm_lan_gethostbyname(const char *);
 diff --git a/dm/host/loader.c b/dm/host/loader.c
-index e237a24..2fe8d62 100644
+index e237a24..9994ab1 100644
 --- a/dm/host/loader.c
 +++ b/dm/host/loader.c
-@@ -17,6 +17,7 @@ pthread_key_t g_keyres[2], g_keyaspect, g_keyaspectui;   // g_keyaspect: aspect
+@@ -9,6 +9,9 @@
+ #include <mach-o/getsect.h>
+ #include <mach-o/ldsyms.h>
+ #include "hle.h"
++#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
++#include "dm_d3_graphics.h"
++#endif
+ 
+ module_t g_mod[MAX_MOD];
+ int g_nmod;
+@@ -17,6 +20,7 @@ pthread_key_t g_keyres[2], g_keyaspect, g_keyaspectui;   // g_keyaspect: aspect
  enum { KEY_K18, KEY_KTLS, KEY_KTLR, KEY_KGATE, KEY_KRES0, KEY_KRES1, KEY_KASPECT, KEY_KASPECTUI, KEY_N };
  
  uint64_t resolve_import(module_t *m, const char *name);
@@ -3747,7 +3800,7 @@ index e237a24..2fe8d62 100644
  void gate_register(uint64_t ret_addr, const char *kind, int arg, uint64_t orig);
  
  static pthread_key_t key_value(unsigned i) {
-@@ -246,7 +247,11 @@ static void relocate(module_t *m) {
+@@ -246,7 +250,11 @@ static void relocate(module_t *m) {
                  if (!v) v = self;
                  if (v != self && nint++ < 8) LOG("%s: %s 绑到先装模块的定义（%s） | bound to an earlier module's definition", m->name, m->strtab + s->st_name, module_of((void *)v) ? module_of((void *)v)->name : "?");
              }
@@ -3760,17 +3813,7 @@ index e237a24..2fe8d62 100644
              if (type == R_AARCH64_JUMP_SLOT) { *where = v; cnt[2]++; }
              else { *where = v + r->r_addend; cnt[1]++; }       // ABS64 / GLOB_DAT
          }
-@@ -307,6 +312,9 @@ void loader_hash_log(void) {
- // and they are vm_remap'ed back at their original relative positions: code pages with copy=FALSE (sharing the same signed pages with __TEXT, r-x), W with copy=TRUE (copy-on-write, paged only when used).
- // The run-time layout is byte-identical to the original image. Remapping signed pages to a new address and then executing them on iOS is exactly what libffi's trampoline table (FFI_EXEC_TRAMPOLINE_TABLE) does
- #include <mach/mach.h>
-+#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
-+#include "dm_d3_graphics.h"
-+#endif
- static void remap_at(module_t *m, vm_address_t to, const void *from, unsigned long size, boolean_t copy, vm_prot_t need) {
-     vm_address_t a = to; vm_prot_t cur = 0, max = 0;
-     kern_return_t kr = vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)from, copy, &cur, &max, VM_INHERIT_NONE);
-@@ -333,10 +341,22 @@ static const struct mach_header_64 *image_mh(void) {
+@@ -333,10 +341,26 @@ static const struct mach_header_64 *image_mh(void) {
  #endif
  static void map_image(module_t *m, const char *dir) {
      (void)dir;
@@ -3789,11 +3832,33 @@ index e237a24..2fe8d62 100644
      const uint8_t *x0 = getsectiondata(IMAGE_MH, "__TEXT", sx0, &z0), *w = getsectiondata(IMAGE_MH, dm, "__img", &zw), *x1 = getsectiondata(IMAGE_MH, "__TEXT", sx1, &z1);
      if (!x0 || !w || !x1) die("内嵌节 %s / %s / %s 缺失", sx0, dm, sx1);
 +#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
-+    if(!strcmp(section_name,"mainwide")&&!dm_d3_wide_text_valid(x0,z0))die("D3 signed wide image words/geometry mismatch; rebuild the verified 1920x720 profile");
++    if(!strcmp(m->name,"main")) {
++        const char *word_mode=dm_d3_graphics_ios_mode(mode);
++        if(!dm_d3_graphics_text_valid(word_mode,x0,z0))
++            die("D3 signed image words/geometry mismatch for mode %s: iOS embeds the %dx720 patched image; rebuild the verified profile",mode?:"normal",dm_d3_graphics_mode_width(word_mode));
++    }
 +#endif
      // Patch area before the base (patch_off < 0): W ends at the end of data (FILE_IMAGE_LEN); bss and the key page are zero pages from vm_allocate and are not in the executable
      int front = m->patch_off < 0;
      if (z0 + zw != (front ? m->file_image_len : (uint64_t)m->patch_off) || (z0 & 0x3FFF) || (zw & 0x3FFF) || (z1 & 0x3FFF) || ((uintptr_t)x0 & 0x3FFF) || ((uintptr_t)w & 0x3FFF) || ((uintptr_t)x1 & 0x3FFF))
+@@ -367,6 +391,17 @@ static uint8_t *slurp(const char *path, size_t *n) {
+ static void map_image(module_t *m, const char *dir) {
+     char path[1024]; snprintf(path, sizeof path, "%s/%s.patched.bin", dir, m->name);
+     size_t sz; uint8_t *raw = slurp(path, &sz);
++#if DM_GAME_PROGRAM_ID == 0x01001B300B9BE000ull
++    // The Mac launcher names the directory and sets the mode before exec; the words must match that
++    // mode, so a 1568x720 image loaded as wider (or the reverse) dies before any byte is mapped.
++    const char *mode=getenv("DM_MAC_DISPLAY_MODE");
++    int width=dm_d3_graphics_mode_width(mode);
++    if(!strcmp(m->name,"main")) {
++        if(width<0)die("D3 patched image %s: unknown DM_MAC_DISPLAY_MODE %s (expected normal, wide or wider)",path,mode);
++        if(width>0&&!dm_d3_graphics_text_valid(mode,raw,sz))
++            die("D3 patched image %s does not match display mode %s: expected the %dx720 word table; rebuild the verified profile",path,mode,width);
++    }
++#endif
+     if (m->patch_off < 0) {
+         // Patch area before the base: file = the first part of the image (text + ro + data) + patch area; bss and the key page are anonymous zero pages. The gap from the patch area's end to the base is left inaccessible (PROT_NONE)
+         uint64_t pre = (uint64_t)-m->patch_off, fl = m->file_image_len;
 diff --git a/dm/tools/patch_nso.py b/dm/tools/patch_nso.py
 index 837700c..98f861c 100644
 --- a/dm/tools/patch_nso.py

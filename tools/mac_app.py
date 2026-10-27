@@ -13,6 +13,8 @@ from app_icons import mac_icns
 from mobile_graphics_profile import launch_directory, verify
 
 LANGUAGES = ('en', 'zh-Hans')
+# Mac bundles both patched sizes; iOS packages 1920x720 only.
+MAC_IMAGES = (('rewrite-wide', 1568), ('rewrite-wider', 1920))
 
 
 def strings_keys(path):
@@ -82,12 +84,17 @@ def main():
     mac_icns(WORK/'game/icon.jpg',resources/'AppIcon.icns',WORK/'build/app-icons')
     shutil.copy2(host, mac / 'dmhost')
     shutil.copytree(WORK / 'rewrite', resources / 'rewrite', ignore=shutil.ignore_patterns('*.log', '*.orig.bin'))
-    wide=launch_directory(WORK,WORK/'mac-profiles'/str(time.time_ns()))
-    proof=verify((WORK/'rewrite/main.patched.bin').read_bytes())
-    graphics=json.loads((wide/'graphics.json').read_text())
-    if not proof['passed'] or proof['configured_sha256']!=graphics['configured_sha256']:
-        raise ValueError('Mac wide image failed independent verification')
-    shutil.copytree(wide,resources/'rewrite-wide',ignore=shutil.ignore_patterns('*.log','*.orig.bin'))
+    graphics = {}
+    original = (WORK / 'rewrite/main.patched.bin').read_bytes()
+    for name, width in MAC_IMAGES:
+        image = launch_directory(WORK, WORK / 'mac-profiles' / f'{time.time_ns()}-{width}', width, 720)
+        proof = verify(original, width=width, height=720)
+        receipt = json.loads((image / 'graphics.json').read_text())
+        if (not proof['passed'] or proof['configured_sha256'] != receipt['configured_sha256']
+                or sha(image / 'main.patched.bin') != receipt['configured_sha256']):
+            raise ValueError(f'Mac {name} image failed independent verification')
+        shutil.copytree(image, resources / name, ignore=shutil.ignore_patterns('*.log', '*.orig.bin'))
+        graphics[name] = receipt
     shutil.copytree(UPSTREAM / 'dm/games' / TITLE, resources / 'game')
     shutil.copytree(shaders, resources / 'shaders' / shaders.name,
                     ignore=shutil.ignore_patterns('*.metal', '*.air', '*.spv'))
@@ -114,7 +121,9 @@ def main():
                                  'icon_source_sha256': sha(WORK/'game/icon.jpg'),
                                  'icon_icns_sha256': sha(final/'Contents/Resources/AppIcon.icns'),
                                  'game_assets': str(WORK / 'game/RomFS'), 'shader_chain': shaders.name,
-                                 'graphics': graphics, 'startup_menu': True, 'test_save_root':str(args.test_session) if args.test_session else None,
+                                 'graphics': graphics['rewrite-wider'], 'graphics_wide': graphics['rewrite-wide'],
+                                 'display_modes': {name: receipt['parameters'] for name, receipt in graphics.items()},
+                                 'startup_menu': True, 'test_save_root':str(args.test_session) if args.test_session else None,
                                  'local_only': True, 'keys_required_at_runtime': False})
     print(final)
 

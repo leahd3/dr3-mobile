@@ -33,6 +33,25 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
         [v.topAnchor constraintEqualToAnchor:box.contentView.topAnchor],
         [v.bottomAnchor constraintEqualToAnchor:box.contentView.bottomAnchor]]];return box;
 }
+// Index order matches the three-segment display control; each patched mode maps to its bundled image directory.
+static NSArray<NSString *> *display_modes(void) { return @[@"normal",@"wide",@"wider"]; }
+static NSString *display_folder(NSString *mode) {
+    return [mode isEqualToString:@"normal"]?@"rewrite":[@"rewrite-" stringByAppendingString:mode];
+}
+static BOOL display_available(NSString *mode) {
+    if([mode isEqualToString:@"normal"])return YES;
+    NSString *folder=[g_resources stringByAppendingPathComponent:display_folder(mode)];
+    return [NSFileManager.defaultManager fileExistsAtPath:[folder stringByAppendingPathComponent:@"main.patched.bin"]];
+}
+static NSString *display_note(NSString *mode) {
+    if([mode isEqualToString:@"wide"])return NSLocalizedString(@"note.display.wide",nil);
+    if([mode isEqualToString:@"wider"])return NSLocalizedString(@"note.display.wider",nil);
+    return NSLocalizedString(@"note.display.normal",nil);
+}
+static NSString *selected_mode(NSSegmentedControl *control) {
+    NSInteger index=control.selectedSegment;
+    return display_modes()[index>=0&&index<(NSInteger)display_modes().count?index:0];
+}
 
 @interface DR3Launcher : NSObject <NSApplicationDelegate,NSWindowDelegate>
 @property(strong) NSWindow *window;
@@ -54,7 +73,7 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
     NSMenu *applicationMenu=[[NSMenu alloc] initWithTitle:@"DR3 Mobile"];
     NSMenuItem *quit=[[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"menu.quit",nil) action:@selector(terminate:) keyEquivalent:@"q"];
     quit.target=NSApp;[applicationMenu addItem:quit];applicationItem.submenu=applicationMenu;NSApp.mainMenu=menu;
-    [NSUserDefaults.standardUserDefaults registerDefaults:@{@"LaunchWide":@NO,@"LaunchMetalHUD":@YES,@"LaunchMetalFX":@YES,@"LaunchLocalLAN":@YES,@"LaunchLanguage":@"system"}];
+    [NSUserDefaults.standardUserDefaults registerDefaults:@{@"LaunchMetalHUD":@YES,@"LaunchMetalFX":@YES,@"LaunchLocalLAN":@YES,@"LaunchLanguage":@"system"}];
     self.window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,760,610)
         styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
@@ -68,10 +87,15 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
     NSStackView *left=column(@[icon,title,label(NSLocalizedString(@"subtitle",nil),12,YES),self.play,
         label(NSLocalizedString(@"note.autosave",nil),12,YES),
         label(g_testSession?NSLocalizedString(@"save.test",nil):NSLocalizedString(@"save.local",nil),12,YES)],16);
-    self.mode=[NSSegmentedControl segmentedControlWithLabels:@[NSLocalizedString(@"mode.normal",nil),NSLocalizedString(@"mode.wide",nil)] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
-    self.mode.selectedSegment=[NSUserDefaults.standardUserDefaults boolForKey:@"LaunchWide"]?1:0;self.mode.identifier=@"display-mode";
-    [self.mode setEnabled:[NSFileManager.defaultManager fileExistsAtPath:[g_resources stringByAppendingPathComponent:@"rewrite-wide/main.patched.bin"]] forSegment:1];
-    if(![self.mode isEnabledForSegment:1])self.mode.selectedSegment=0;
+    NSArray<NSString *> *modes=display_modes();
+    self.mode=[NSSegmentedControl segmentedControlWithLabels:@[NSLocalizedString(@"mode.normal",nil),NSLocalizedString(@"mode.wide",nil),NSLocalizedString(@"mode.wider",nil)] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(changed:)];
+    for(NSInteger i=1;i<(NSInteger)modes.count;i++)[self.mode setEnabled:display_available(modes[i]) forSegment:i];
+    // LaunchDisplayMode supersedes the retired LaunchWide bool; a missing preference migrates from it.
+    NSString *saved=[NSUserDefaults.standardUserDefaults stringForKey:@"LaunchDisplayMode"];
+    if(!saved)saved=[NSUserDefaults.standardUserDefaults boolForKey:@"LaunchWide"]?@"wide":@"normal";
+    NSInteger segment=[modes indexOfObject:saved];
+    if(segment==NSNotFound||!display_available(modes[segment]))segment=0;
+    self.mode.selectedSegment=segment;self.mode.identifier=@"display-mode";
     self.displayNote=label(@"",12,YES);self.graphicsNote=label(@"",12,YES);
     self.hud=[self toggle:NSLocalizedString(@"toggle.hud",nil) key:@"LaunchMetalHUD"];
     self.fx=[self toggle:NSLocalizedString(@"toggle.metalfx",nil) key:@"LaunchMetalFX"];
@@ -102,17 +126,20 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
 }
 - (void)changed:(id)sender {
     (void)sender;NSUserDefaults *d=NSUserDefaults.standardUserDefaults;
-    [d setBool:self.mode.selectedSegment==1 forKey:@"LaunchWide"];
+    NSString *mode=selected_mode(self.mode);
+    [d setObject:mode forKey:@"LaunchDisplayMode"];
     for(NSButton *b in @[self.hud,self.fx,self.lan])[d setBool:b.state==NSControlStateValueOn forKey:b.identifier];
     [d setObject:self.language.selectedItem.representedObject forKey:@"LaunchLanguage"];
-    self.displayNote.stringValue=self.mode.selectedSegment==1?NSLocalizedString(@"note.display.wide",nil):NSLocalizedString(@"note.display.normal",nil);
+    self.displayNote.stringValue=display_note(mode);
     self.graphicsNote.stringValue=self.fx.state==NSControlStateValueOn?NSLocalizedString(@"note.graphics.fx",nil):NSLocalizedString(@"note.graphics.direct",nil);
 }
 - (void)start:(id)sender {
     (void)sender;if(self.starting)return;self.starting=YES;self.play.enabled=NO;
     @try {
-        BOOL wide=self.mode.selectedSegment==1,fx=self.fx.state==NSControlStateValueOn;
-        NSString *rewrite=[g_resources stringByAppendingPathComponent:wide?@"rewrite-wide":@"rewrite"];
+        BOOL fx=self.fx.state==NSControlStateValueOn;
+        NSString *mode=selected_mode(self.mode);
+        if(!display_available(mode))mode=@"normal";
+        NSString *rewrite=[g_resources stringByAppendingPathComponent:display_folder(mode)];
         NSString *binary=[[[g_resources stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"MacOS"] stringByAppendingPathComponent:@"dmhost"];
         NSFileManager *fm=NSFileManager.defaultManager;NSError *error=nil;
         if(![fm createDirectoryAtPath:[g_runRoot stringByAppendingPathComponent:@"temp"] withIntermediateDirectories:YES attributes:nil error:&error])
@@ -132,10 +159,10 @@ static NSBox *section(NSString *title,NSArray<NSView *> *views) {
         setenv("DM_HID_RECEIPT_LIMIT","65536",1);setenv("DM_NVN_TSV_CALLS","0",1);setenv("DM_NVN_UNIFORM_FORWARD","1",1);
         setenv("DM_NVN_TBDR","0",1);setenv("DM_PSO_MANIFEST","off",1);
         setenv("MTL_HUD_ENABLED",self.hud.state==NSControlStateValueOn?"1":"0",1);
-        setenv("DM_METALFX",fx?"spatial":"off",1);setenv("DM_MAC_DISPLAY_MODE",wide?"wide":"normal",1);
+        setenv("DM_METALFX",fx?"spatial":"off",1);setenv("DM_MAC_DISPLAY_MODE",mode.UTF8String,1);
         setenv("DM_DR3_LAN",self.lan.state==NSControlStateValueOn?"1":"0",1);
         [NSUserDefaults.standardUserDefaults synchronize];
-        fprintf(stderr,"launch: mode=%s HUD=%s MetalFX=%s LAN=%s lang=%s save=%s\n",wide?"wide":"normal",getenv("MTL_HUD_ENABLED"),getenv("DM_METALFX"),getenv("DM_DR3_LAN"),getenv("DM_LANG"),g_testSession?"test-copy":"local");
+        fprintf(stderr,"launch: mode=%s HUD=%s MetalFX=%s LAN=%s lang=%s save=%s\n",mode.UTF8String,getenv("MTL_HUD_ENABLED"),getenv("DM_METALFX"),getenv("DM_DR3_LAN"),getenv("DM_LANG"),g_testSession?"test-copy":"local");
         char *args[]={(char *)binary.fileSystemRepresentation,(char *)rewrite.fileSystemRepresentation,"main","sdk",NULL};
         execv(args[0],args);[NSException raise:@"Launch failed" format:@"%s",strerror(errno)];
     } @catch(NSException *e) {

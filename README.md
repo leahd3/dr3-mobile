@@ -12,18 +12,19 @@ Independent community research; not an official port and not affiliated with or 
 
 ## Observed status
 
-As of **2026-10-18**. Research preview, not complete-game compatibility.
+As of **2026-10-27**. Research preview, not complete-game compatibility.
 
 | Area | Verified scope |
 |---|---|
 | macOS / Apple silicon | Native startup, town/menu/inventory interaction, controller input and isolated save/reload checks |
 | iPhone Air / A19 Pro / iOS 27.2 | User-confirmed town entry, working touch input, audible sound and corrected wide-screen output |
 | iPhone 15 Pro / A17 Pro / iOS 27.2 | Device-specific build, development-signed USB install, complete resource checks and app launch; gameplay/performance not yet verified |
-| Graphics | 1,323 unique original stages compiled locally; 1,993 iPhoneOS libraries including fetch/layout variants; MetalFX Spatial and Normal/Wide launch options |
+| Graphics | 1,323 unique original stages compiled locally; 1,993 iPhoneOS libraries including fetch/layout variants; MetalFX Spatial and Normal/Wide/Wider launch options |
+| Offline seasons and challenge rifts | Season 37 calendar, season XVars and the weekly challenge-rift payload are injected from the host with no online state; the Challenge Rifts row appears in Mode Select. Entry is still locked until a Greater Rift is cleared, so rift entry is **not** verified |
 | Local Wi-Fi | Mac host → iPhone client joined the same party; user confirmed both characters visible. Long sessions, combat/drop/scene synchronization, four players and reverse hosting remain unverified |
 | Public Internet / Mesh | Design contract only; no released Mesh integration or Battle.net services |
 
-The launcher offers Metal HUD, MetalFX Spatial, normal/wide view and local Wi-Fi options. The wide profile renders at 1920×720; mobile MetalFX targets approximately 2K while preserving aspect. macOS and iOS use separate shader builds. Frame rate varies with device and scene; this is not a guarantee of sustained 60 FPS.
+The macOS launcher offers three display modes — Normal 16:9 (1600×900), Wide (1568×720) and Wider (1920×720) — plus Metal HUD, MetalFX Spatial and local Wi-Fi options. Both patched modes expand the horizontal view while keeping the vertical field of view; iOS keeps its single wide mode at 1920×720. Mobile MetalFX targets approximately 2K while preserving aspect. macOS and iOS use separate shader builds. Frame rate varies with device and scene; this is not a guarantee of sustained 60 FPS.
 
 Constant-update forwarding substantially improved the observed Mac scene performance, but the original lantern flicker reproduced when forwarding was enabled. Attachment-dependency guards retain the optimization; the original location still needs dynamic visual acceptance. Full chapters, sustained thermal behavior, every rendering path and extended multiplayer stability are pending. See [status](STATUS.md), [acceptance checklist](docs/COMPLETION_CHECKLIST.md), [rendering notes](docs/LANTERN_STABILITY.md) and [LAN scope](docs/LAN_MULTIPLAYER.md).
 

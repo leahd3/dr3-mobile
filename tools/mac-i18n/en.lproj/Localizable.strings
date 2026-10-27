@@ -9,8 +9,10 @@
 "section.display" = "Display Mode";
 "mode.normal" = "Normal 16:9";
 "mode.wide" = "Wide";
-"note.display.normal" = "1280×720, original 16:9 field of view.";
-"note.display.wide" = "1920×720, wider field of view; the window keeps the image ratio.";
+"mode.wider" = "Wider";
+"note.display.normal" = "1600×900, original 16:9 field of view.";
+"note.display.wide" = "1568×720, wider field of view; the window keeps the image ratio.";
+"note.display.wider" = "1920×720, widest field of view; the window keeps the image ratio.";
 "section.graphics" = "Graphics";
 "toggle.hud" = "Metal HUD";
 "toggle.metalfx" = "MetalFX Upscaling";

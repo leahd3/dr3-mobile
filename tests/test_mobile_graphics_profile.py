@@ -28,7 +28,7 @@ class MobileGraphicsProfile(unittest.TestCase):
 
     def test_changes_are_limited_and_original_is_immutable(self):
         source=self.source();before=bytes(source)
-        for width in (1280,1560,1600,1912,1920):
+        for width in (1280,1560,1568,1600,1912,1920):
             result=m.configure(source,width,720);restored=bytearray(result)
             for offset,old,_,_ in m.sites(width,720):struct.pack_into('<I',restored,offset,old)
             self.assertEqual(restored,source)
@@ -53,9 +53,10 @@ class MobileGraphicsProfile(unittest.TestCase):
     def test_independent_guest_math(self):
         llvm=m.llvm_mc()
         if not llvm.exists():self.skipTest('LLVM unavailable')
-        for width in (1280,1600,1920):
+        for width in (1280,1568,1600,1920):
             report=m.verify(self.source(),llvm,width,720)
             self.assertTrue(report['passed'])
+            self.assertEqual(report['parameters']['width'],width)
             self.assertEqual(report['unicorn_perspective_pairs'],64)
             self.assertEqual(report['unicorn_orthographic_pairs'],64)
             self.assertEqual(report['unicorn_whole_texture_query_cases'],28)
@@ -78,38 +79,47 @@ class MobileGraphicsProfile(unittest.TestCase):
 
     def test_packaging_identity_and_complete_hash_guards(self):
         with tempfile.TemporaryDirectory() as temp:
-            path=Path(temp);profile,verification=self.fixture(path);destination=path/'new'
+            path=Path(temp);profile,verification=self.fixture(path)
+            # Both Mac patched sizes are packaged explicitly; neither relies on the iOS default width.
+            for width in (1568,1920):
+                destination=path/f'new-{width}'
+                with mock.patch.object(m,'PROFILE',profile):
+                    output=m.launch_directory(path,destination,width,720)
+                    self.assertEqual(output,destination)
+                    self.assertEqual((destination/'sdk.patched.bin').resolve(),(path/'rewrite/sdk.patched.bin').resolve())
+                    receipt=json.loads((destination/'graphics.json').read_text())
+                    self.assertEqual(receipt['parameters']['width'],width)
+                    self.assertEqual(receipt['configured_sha256'],m.digest(destination/'main.patched.bin'))
+                    self.assertEqual(receipt['configured_sha256'],hashlib.sha256(m.configure(self.source(),width,720)).hexdigest())
+                    with self.assertRaises(FileExistsError):m.launch_directory(path,destination,width,720)
+            destination=path/'new-1568'
             with mock.patch.object(m,'PROFILE',profile):
-                output=m.launch_directory(path,destination)
-                self.assertEqual(output,destination)
-                self.assertEqual((destination/'sdk.patched.bin').resolve(),(path/'rewrite/sdk.patched.bin').resolve())
-                receipt=json.loads((destination/'graphics.json').read_text())
-                self.assertEqual(receipt['configured_sha256'],m.digest(destination/'main.patched.bin'))
-                with self.assertRaises(FileExistsError):m.launch_directory(path,destination)
                 # Corruption outside edited sites must fail cryptographic guard.
                 damaged=bytearray((path/'rewrite/main.patched.bin').read_bytes());damaged[0x100]^=1
                 (path/'rewrite/main.patched.bin').write_bytes(damaged)
-                with self.assertRaisesRegex(ValueError,'unchanged verified'):m.launch_directory(path,path/'corrupt')
+                with self.assertRaisesRegex(ValueError,'unchanged verified'):m.launch_directory(path,path/'corrupt',1568,720)
                 self.assertFalse((path/'corrupt').exists())
                 (path/'rewrite/main.patched.bin').write_bytes(self.source())
                 verification['artifacts']={};(path/'verification.json').write_text(json.dumps(verification))
-                with self.assertRaisesRegex(ValueError,'complete verified'):m.launch_directory(path,path/'missing')
+                with self.assertRaisesRegex(ValueError,'complete verified'):m.launch_directory(path,path/'missing',1568,720)
                 self.assertFalse((path/'missing').exists())
                 # Build-ID failure is checked even before rewrite metadata.
                 raw=bytearray((path/'game/ExeFS/main').read_bytes());raw[0x40]^=1
                 (path/'game/ExeFS/main').write_bytes(raw)
-                with self.assertRaisesRegex(ValueError,'exact inventoried main'):m.launch_directory(path,path/'unknown')
+                with self.assertRaisesRegex(ValueError,'exact inventoried main'):m.launch_directory(path,path/'unknown',1568,720)
                 self.assertFalse((path/'unknown').exists())
 
-    def test_same_signed_loader_header_accepts_only_exact_wide_words(self):
+    def test_same_signed_loader_header_accepts_only_the_selected_mode_words(self):
         clang=shutil.which('clang')
         if not clang:self.skipTest('C compiler unavailable')
         with tempfile.TemporaryDirectory() as temp:
-            path=Path(temp);image=path/'wide.bin';image.write_bytes(m.configure(self.source()))
+            path=Path(temp);images=[]
+            for width in (1568,1920):
+                image=path/f'{width}.bin';image.write_bytes(m.configure(self.source(),width,720));images.append(str(image))
             binary=path/'guard-test'
             subprocess.run([clang,'-std=c11','-Wall','-Wextra','-Werror',
                 str(ROOT/'tests/test_d3_graphics.c'),'-o',str(binary)],check=True,capture_output=True,text=True)
-            result=subprocess.run([str(binary),str(image)],check=True,capture_output=True,text=True)
+            result=subprocess.run([str(binary),*images],check=True,capture_output=True,text=True)
             self.assertIn('PASS:',result.stdout)
 
 

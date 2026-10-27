@@ -69,6 +69,9 @@ obj/
 
 # Upstream source is reconstructed from its pinned revision and patch.
 third_party/nxnative/
+
+# Reference-only checkouts kept on disk but never published.
+vendor/d3hack/
 .impeccable/
 *.cpk
 *.shd

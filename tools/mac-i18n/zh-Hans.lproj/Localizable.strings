@@ -9,8 +9,10 @@
 "section.display" = "画面模式";
 "mode.normal" = "正常 16:9";
 "mode.wide" = "宽屏";
-"note.display.normal" = "1280×720，保留原版 16:9 视野。";
-"note.display.wide" = "1920×720，扩大左右视野；窗口保持画面比例。";
+"mode.wider" = "超宽屏";
+"note.display.normal" = "1600×900，保留原版 16:9 视野。";
+"note.display.wide" = "1568×720，扩大左右视野；窗口保持画面比例。";
+"note.display.wider" = "1920×720，进一步扩大左右视野；窗口保持画面比例。";
 "section.graphics" = "图形选项";
 "toggle.hud" = "Metal HUD";
 "toggle.metalfx" = "MetalFX 超分";
