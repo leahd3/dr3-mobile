@@ -1,5 +1,5 @@
 diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
-index d4c3531..de5f4f5 100644
+index d4c3531..ebe0d0f 100644
 --- a/dm/gfx/nvn/hle_nvn.c
 +++ b/dm/gfx/nvn/hle_nvn.c
 @@ -52,6 +52,7 @@ static uint8_t g_unimpl_seen[NVN_NFUNC];
@@ -28,7 +28,31 @@ index d4c3531..de5f4f5 100644
  
  // ---------- Memory pools ----------
  NVN(nvnMemoryPoolBuilderSetDefaults, void, NVNmemoryPoolBuilder *b) { memset(b, 0, sizeof(pool_builder_t)); }
-@@ -205,6 +208,8 @@ NVN(nvnTextureBuilderSetSize1D, void, NVNtextureBuilder *b, int w) { TB(b)->d.wi
+@@ -189,6 +192,23 @@ NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *sp, const NVNmemoryPoo
+ NVN(nvnSamplerPoolFinalize, void, NVNsamplerPool *sp) { (void)sp; }
+ NVN(nvnSamplerPoolRegisterSampler, void, const NVNsamplerPool *sp, int id, const NVNsampler *s) { (void)sp; mtl_reg_samp(id, &((const samp_t *)s)->p); }
+ 
++// ---------- MSAA 统计（只读埋点：游戏实际请求多少样本、按贴图种类分）----------
++// 记在贴图初始化而不是 BuilderSetSamples：同一个 builder 可能被多次初始化，按初始化计数才等于每张贴图一次
++static _Atomic uint64_t g_msaa_hist[9];                        // 下标 = 请求样本数，8 含更高
++static _Atomic uint64_t g_msaa_ntex, g_msaa_nms, g_msaa_ndepth_ms;
++static _Atomic int g_msaa_done;                                // 汇总行只出一行，出过之后不再计数
++static void msaa_report(void);
++// 深度目标：NVN 的贴图 builder 没有 usage 字段，只能看格式（STENCIL8 到 DEPTH32F_STENCIL8 连续一段）
++static int msaa_is_depth(int fmt) { return fmt >= NVN_FORMAT_STENCIL8 && fmt <= NVN_FORMAT_DEPTH32F_STENCIL8; }
++static void msaa_note(const nvn_texdesc *d) {
++    if (atomic_load(&g_msaa_done)) return;
++    unsigned b = d->samples < 0 ? 0u : (unsigned)d->samples > 8 ? 8u : (unsigned)d->samples;   // 0 和 1 都是单采样，分开列
++    atomic_fetch_add(&g_msaa_hist[b], 1);
++    uint64_t n = atomic_fetch_add(&g_msaa_ntex, 1) + 1;
++    if (d->samples > 1) { atomic_fetch_add(&g_msaa_nms, 1); if (msaa_is_depth(d->format)) atomic_fetch_add(&g_msaa_ndepth_ms, 1); }
++    if (n >= 96) msaa_report();
++}
++
+ // ---------- Textures ----------
+ #define TB(b) ((tex_builder_t *)(b))
+ NVN(nvnTextureBuilderSetDefaults, void, NVNtextureBuilder *b) {
+@@ -205,6 +225,8 @@ NVN(nvnTextureBuilderSetSize1D, void, NVNtextureBuilder *b, int w) { TB(b)->d.wi
  NVN(nvnTextureBuilderSetLevels, void, NVNtextureBuilder *b, int v) { TB(b)->d.levels = v; }
  NVN(nvnTextureBuilderSetFormat, void, NVNtextureBuilder *b, NVNformat f) { TB(b)->d.format = f; }
  NVN(nvnTextureBuilderSetSamples, void, NVNtextureBuilder *b, int s) { TB(b)->d.samples = s; }
@@ -37,7 +61,15 @@ index d4c3531..de5f4f5 100644
  NVN(nvnTextureBuilderSetStride, void, NVNtextureBuilder *b, ptrdiff_t s) { TB(b)->d.stride = (uint32_t)s; }
  NVN(nvnTextureBuilderSetStorage, void, NVNtextureBuilder *b, NVNmemoryPool *p, ptrdiff_t off) { TB(b)->pool = (pool_t *)p; TB(b)->off = off; }
  NVN(nvnTextureBuilderSetPackagedTextureLayout, void, NVNtextureBuilder *b, const NVNpackagedTextureLayout *l) {
-@@ -371,9 +376,16 @@ static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
+@@ -249,6 +271,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
+     }
+     OLOG("Texture %p %ux%ux%u lv%u fmt=%#x tgt=%d flags=%#x size=%#llx", (void *)t, o->d.width, o->d.height, o->d.depth,
+          o->d.levels, o->d.format, o->d.target, o->d.flags, o->L.size);
++    msaa_note(&o->d);   // 放在最后：计数只看已写好的描述，不影响上面任何一步
+     return 1;
+ }
+ NVN(nvnTextureFinalize, void, NVNtexture *t) { mtl_tex_release(TX(t)); TX(t)->magic = 0; }
+@@ -371,9 +394,16 @@ static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
      return 1;
  }
  int prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
@@ -56,7 +88,7 @@ index d4c3531..de5f4f5 100644
      memcpy(key, k->key[st], 8);
      return 1;
  }
-@@ -395,21 +407,53 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData
+@@ -395,21 +425,53 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData
  }
  
  // ---------- Sync / events ----------
@@ -122,7 +154,7 @@ index d4c3531..de5f4f5 100644
  }
  NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
  NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { *(ev_builder_t *)b = (ev_builder_t){(const pool_t *)p, off}; }
-@@ -456,6 +500,41 @@ NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; mtl_finish(); }
+@@ -456,6 +518,41 @@ NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; mtl_finish(); }
  #define CB(c) ((cmd_t *)(c))
  #define OP_RESERVE 24                             // Always keep enough room at the segment end for one JUMP / END
  
@@ -164,7 +196,7 @@ index d4c3531..de5f4f5 100644
  NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
      memset(c, 0, sizeof(cmd_t)); CB(c)->magic = MAGIC('C', 'M', 'D', 'B'); CB(c)->dev = d; return 1;
  }
-@@ -485,6 +564,7 @@ static void cmd_new_segment(cmd_t *o, uint8_t *mem, size_t n) {
+@@ -485,6 +582,7 @@ static void cmd_new_segment(cmd_t *o, uint8_t *mem, size_t n) {
      uint8_t *start = align8(mem), *end = mem + n;
      if (o->recording && o->cur) { if (cs_on() && o->end > o->cur) { pthread_mutex_lock(&g_cs_mu); g_cs.waste += (uint64_t)(o->end - o->cur); pthread_mutex_unlock(&g_cs_mu); } put_hdr(o->cur, OP_JUMP, 16); memcpy(o->cur + 8, &start, 8);
          o->used += 16; }   // the JUMP also occupies guest memory of this recording: count it in used, so the game packing the next recording right behind by used does not overwrite it
@@ -172,7 +204,7 @@ index d4c3531..de5f4f5 100644
      o->cur = start; o->end = end;
  }
  // Host-supplied segment when the game's own command memory runs out: when the game's out-of-memory callback cannot allocate from its command memory pool, it calls AddCommandMemory with an empty pool (p = NULL, n = 0)
-@@ -559,19 +639,36 @@ static uint8_t *cmd_alloc(cmd_t *o, uint32_t size) {
+@@ -559,19 +657,36 @@ static uint8_t *cmd_alloc(cmd_t *o, uint32_t size) {
  }
  NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
      cmd_t *o = CB(c);
@@ -213,7 +245,7 @@ index d4c3531..de5f4f5 100644
  }
  NVN(nvnCommandBufferSignalEvent, void, NVNcommandBuffer *c, const NVNevent *e, NVNeventSignalMode m, NVNeventSignalLocation loc, int flags, uint32_t v) {
      (void)loc; (void)flags;
-@@ -652,7 +749,12 @@ NVN(nvnCommandBufferSetViewports, void, NVNcommandBuffer *c, int first, int n, c
+@@ -652,7 +767,12 @@ NVN(nvnCommandBufferSetViewports, void, NVNcommandBuffer *c, int first, int n, c
  NVN(nvnCommandBufferSetScissor, void, NVNcommandBuffer *c, int x, int y, int w, int h) { *REC(c, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
  NVN(nvnCommandBufferSetDepthRange, void, NVNcommandBuffer *c, float n, float f) { *REC(c, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
  NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *p, int stages) {
@@ -227,7 +259,7 @@ index d4c3531..de5f4f5 100644
  }
  static void bind_state(NVNcommandBuffer *c, int kind, const void *st, size_t n) { p_bind_state *r = REC(c, OP_BIND_STATE, p_bind_state); r->kind = kind; memcpy(r->bytes, st, n); }
  NVN(nvnCommandBufferBindBlendState, void, NVNcommandBuffer *c, const NVNblendState *st) { bind_state(c, 0, st, sizeof(blend_st)); }
-@@ -743,6 +845,12 @@ NVN(nvnCommandBufferCopyTextureToTexture, void, NVNcommandBuffer *c, const NVNte
+@@ -743,6 +863,12 @@ NVN(nvnCommandBufferCopyTextureToTexture, void, NVNcommandBuffer *c, const NVNte
      p_copy_t2t *o = REC_SNAP(c, OP_COPY_T2T, p_copy_t2t, 2); o->src = tex_snap(o, SNAP_OFF(p_copy_t2t), 0, s, (uint64_t)__builtin_return_address(0)); o->dst = tex_snap(o, SNAP_OFF(p_copy_t2t), 1, d, (uint64_t)__builtin_return_address(0));
      copy_view(&o->sv, &o->has_sv, sv); copy_view(&o->dv, &o->has_dv, dv); o->sr = *sr; o->dr = *dr; o->flags = flags;
  }
@@ -240,7 +272,7 @@ index d4c3531..de5f4f5 100644
  NVN(nvnCommandBufferSetCopyRowStride, void, NVNcommandBuffer *c, ptrdiff_t st) { p_copy_stride *o = REC(c, OP_COPY_STRIDE, p_copy_stride); o->stride = st; o->image = 0; }
  NVN(nvnCommandBufferSetCopyImageStride, void, NVNcommandBuffer *c, ptrdiff_t st) { p_copy_stride *o = REC(c, OP_COPY_STRIDE, p_copy_stride); o->stride = st; o->image = 1; }   // Link's Awakening
  NVN(nvnCommandBufferSetBlendColor, void, NVNcommandBuffer *c, const float *v) { memcpy(REC(c, OP_BLEND_COLOR, p_blend_color)->rgba, v, 16); }
-@@ -838,7 +946,10 @@ void dm_gfx_suspend(int on) {
+@@ -838,7 +964,10 @@ void dm_gfx_suspend(int on) {
      if (on) { mtl_drain(); LOG("[nvn] 图形挂起：在途 GPU 工作已清空"); } else LOG("[nvn] 图形恢复");
  }
  NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
@@ -251,7 +283,7 @@ index d4c3531..de5f4f5 100644
      uint64_t t0 = now_ns(), c0 = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID), i0, y0, s0 = thr_sys_ns(); thr_counts(&i0, &y0);
      ((queue_t *)q)->submits++;
      mtl_sub_begin();
-@@ -852,6 +963,7 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
+@@ -852,6 +981,7 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
      atomic_fetch_add(&g_cum_sub_cyc, y1 - y0); atomic_fetch_add(&g_cum_sub_sys_ns, thr_sys_ns() - s0); atomic_fetch_add(&g_cum_sub_wall_ns, dw);
      atomic_fetch_add(&g_sub_cpu_ns, dc); atomic_fetch_add(&g_cum_sub_cpu_ns, dc);
      atomic_fetch_add(&g_sub_instr, di); atomic_fetch_add(&g_cum_sub_instr, di);
@@ -259,7 +291,7 @@ index d4c3531..de5f4f5 100644
      gfx_leave();
  }
  
-@@ -863,7 +975,6 @@ static const char *const g_nops[] = {
+@@ -863,7 +993,6 @@ static const char *const g_nops[] = {
      "nvnCommandBufferMultiDrawElementsIndirectCount",
      "nvnCommandBufferDispatchComputeIndirect",
      "nvnCommandBufferSetDepthBounds",
@@ -267,7 +299,43 @@ index d4c3531..de5f4f5 100644
      "nvnCommandBufferSetShaderScratchMemory",
      "nvnCommandBufferPushDebugGroupDynamic",
      "nvnCommandBufferPopDebugGroup",
-@@ -1218,6 +1329,9 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
+@@ -916,8 +1045,9 @@ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
+     memset(o, 0, sizeof *o); o->magic = MAGIC('W', 'I', 'N', 'D'); o->native = s->native; o->ntex = s->ntex; o->interval = s->interval;
+     memcpy(o->tex, s->tex, sizeof o->tex);
+     for (int i = 0; i < o->ntex; i++) if (o->tex[i]) mtl_xv_window_tex(CTX(o->tex[i])->serial);
+-    LOG("[nvn] WindowInitialize 交换链 %d 张 间隔 %d 首张 %dx%d 格式 %#x", o->ntex, o->interval,
+-        o->ntex ? (int)CTX(o->tex[0])->d.width : 0, o->ntex ? (int)CTX(o->tex[0])->d.height : 0, o->ntex ? CTX(o->tex[0])->d.format : 0);
++    LOG("[nvn] WindowInitialize 交换链 %d 张 间隔 %d 首张 %dx%d 格式 %#x 样本 %d", o->ntex, o->interval,
++        o->ntex ? (int)CTX(o->tex[0])->d.width : 0, o->ntex ? (int)CTX(o->tex[0])->d.height : 0, o->ntex ? CTX(o->tex[0])->d.format : 0,
++        o->ntex ? CTX(o->tex[0])->d.samples : 0);
+     return 1;
+ }
+ NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return ((const win_t *)w)->interval; }   // Link's Awakening reads it back every frame
+@@ -938,6 +1068,15 @@ __attribute__((weak)) void dm_main_yield_stats(uint64_t *n, uint64_t *ns) { *n =
+ __attribute__((weak)) uint32_t dm_guest_work_qos(unsigned *count) { if (count) *count = 0; return QOS_CLASS_UNSPECIFIED; }
+ extern uint32_t mtl_present_qos(void);
+ static uint64_t g_frame;
++// MSAA 汇总行：帧数只在 present 路径上推进，帧 900 这个触发条件只能放在这里（贴图数满 96 时已由 msaa_note 提前触发）
++static void msaa_report(void) {
++    if (atomic_exchange(&g_msaa_done, 1)) return;
++    unsigned long long h[9];
++    for (int i = 0; i < 9; i++) h[i] = atomic_load(&g_msaa_hist[i]);
++    LOG("nvn MSAA 统计：纹理 %llu 张，samples>1 %llu 张（深度 %llu），分布 0:%llu 1:%llu 2:%llu 4:%llu 8:%llu",
++        (unsigned long long)atomic_load(&g_msaa_ntex), (unsigned long long)atomic_load(&g_msaa_nms),
++        (unsigned long long)atomic_load(&g_msaa_ndepth_ms), h[0], h[1], h[2], h[4], h[8]);
++}
+ static uint64_t g_acq_wait_ns, g_pq_wait_ns;   // Accumulated display-link wait / wait for the present queue to return inside acquire, recorded per frame at present (there can be several acquires within one frame)
+ uint64_t dm_nvn_frame_count(void) { return g_frame; }
+ extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the UIMSG timestamps)
+@@ -974,6 +1113,7 @@ NVN(nvnQueueAcquireTexture, NVNqueueAcquireTextureResult, NVNqueue *q, NVNwindow
+ static uint64_t g_prev[NVN_NFUNC];
+ static FILE *g_tsv;
+ static void dump_frame(void) {
++    if (g_frame >= 900) msaa_report();   // 第二个触发条件（帧计数的自增在函数末尾，这里 g_frame 就是本帧序号）
+     static int inited, nframes = 3, calls = 1;
+     if (!inited) {
+         inited = 1;
+@@ -1218,6 +1358,9 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
              if (pproc) trow(f, "@proc_cpu_ms", (pc - pproc) / 1e6); pproc = pc;
              trow(f, "@call_ms", (t0 - g_t0_ns) / 1e6);
          }
@@ -277,7 +345,7 @@ index d4c3531..de5f4f5 100644
          trow(f, "@passes", (double)(ps - prev_pass)); trow(f, "@draws", (double)(dr - prev_draw));
          static uint64_t pl, pst, pf, pudc; uint64_t l, st, fu; mtl_bw(&l, &st, &fu);
          trow(f, "@rt_load_mb", (l - pl) / 1048576.0); trow(f, "@rt_store_mb", (st - pst) / 1048576.0); trow(f, "@pass_full_rw", (double)(fu - pf));
-@@ -1435,7 +1549,14 @@ NVN_NOPROTO(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const sha
+@@ -1435,7 +1578,14 @@ NVN_NOPROTO(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const sha
  // Singular / combined forms → plural / separate forms; state the replay layer does not have yet (conditional render, depth bounds, ...) is logged once and drawing continues (better to over-draw than to drop).
  #include "../tex/nvn_deswizzle.h"
  
@@ -293,7 +361,7 @@ index d4c3531..de5f4f5 100644
  // Combined texture handle (texture id | sampler id << 20) is recorded into the texture slot as is: the replay layer takes the texture from the low 20 bits and the sampler from the high bits (nvn_mtl.m NVN_RB_SAMPT)
  NVN(nvnCommandBufferBindTexture, void, NVNcommandBuffer *c, NVNshaderStage st, int i, NVNtextureHandle h) { uint64_t v = (uint64_t)h; bind_handles(c, OP_BIND_TEX, st, i, 1, &v); }
  // "Deferred" binding: the GPU reads the handles h points to when it executes this command, not at recording. The per-texture binding of The Legend of Zelda: Breath of the Wild's engine (main+0xec2e64) always uses it,
-@@ -1573,4 +1694,12 @@ int nvn_host_signal_sync(void *nvnsync) {
+@@ -1573,4 +1723,12 @@ int nvn_host_signal_sync(void *nvnsync) {
      if (!o || o->magic != MAGIC('S', 'Y', 'N', 'C')) return -1;
      o->fence = 0; o->fenced = 1; return 0;
  }
@@ -307,6 +375,7 @@ index d4c3531..de5f4f5 100644
 +    if (!(CTX(t)->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)))
 +        mtl_tex_cpu_written(CTX(t));
 +}
+
 diff --git a/dm/gfx/nvn/nvn_command_copy.h b/dm/gfx/nvn/nvn_command_copy.h
 new file mode 100644
 index 0000000..06df5cf
