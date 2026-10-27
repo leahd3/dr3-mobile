@@ -45,7 +45,7 @@ def main():
     import mobile_graphics_profile as mobile
     original=(WORK/'rewrite/main.patched.bin').read_bytes()
     proof=mobile.verify(original)
-    wide=mobile.launch_directory(WORK,WORK/'ios-profiles'/str(time.time_ns()),1568,720)
+    wide=mobile.launch_directory(WORK,WORK/'ios-profiles'/str(time.time_ns()),1920,720)
     graphics=json.loads((wide/'graphics.json').read_text())
     if not proof['passed'] or proof['configured_sha256']!=graphics['configured_sha256']:
         raise ValueError('Wide image differs from independent graphics verification')

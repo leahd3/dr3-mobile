@@ -20,7 +20,12 @@ int main(int argc,char **argv) {
         for(unsigned i=0;i<sizeof offsets/sizeof offsets[0];i++) {
             text[offsets[i]]^=1;assert(!dm_d3_wide_text_valid(text,(size_t)n));text[offsets[i]]^=1;
         }
-        assert(!dm_d3_wide_text_valid(text,0x29b91f));free(text);
+        assert(!dm_d3_wide_text_valid(text,0x29b91f));
+        // The previous 1568x720 profile must not pass the raised guard.
+        const uint32_t old[][2]={{0xe7858,0xd280c408},{0xe785c,0xd280c409},
+            {0xe7868,0x528c16ca},{0xe786c,0x72a8016a}};
+        for(unsigned i=0;i<sizeof old/sizeof old[0];i++)memcpy(text+old[i][0],&old[i][1],4);
+        assert(!dm_d3_wide_text_valid(text,(size_t)n));free(text);
     }
     puts("PASS: exact-build signed wide selection, unchanged normal/SDK identity, geometry/text guards and mutations");
 }

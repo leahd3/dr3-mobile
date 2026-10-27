@@ -14,7 +14,7 @@ Inherit the current Bayonetta3 Mobile native launcher's two-column UIKit setting
 
 ## Rendering and network truth
 
-The selected Air widescreen profile renders 1568×720 with expanded horizontal camera view. MetalFX Spatial targets 2560×1176; normal mode targets 2560×1440. Device rendering and performance must be verified separately from build or simulator UI results. Local multiplayer uses a native LAN transport and Bonjour discovery; actual two-device gameplay requires an end-to-end test. Battle.net and mesh are outside this request's implementation.
+The selected Air widescreen profile renders 1920×720 with expanded horizontal camera view. MetalFX Spatial targets 2560×960; normal mode targets 2560×1440. Device rendering and performance must be verified separately from build or simulator UI results. Local multiplayer uses a native LAN transport and Bonjour discovery; actual two-device gameplay requires an end-to-end test. Battle.net and mesh are outside this request's implementation.
 
 ## Constraints
 

@@ -10,7 +10,7 @@
 "mode.normal" = "Normal 16:9";
 "mode.wide" = "Wide";
 "note.display.normal" = "1280×720, original 16:9 field of view.";
-"note.display.wide" = "1568×720, wider field of view; the window keeps the image ratio.";
+"note.display.wide" = "1920×720, wider field of view; the window keeps the image ratio.";
 "section.graphics" = "Graphics";
 "toggle.hud" = "Metal HUD";
 "toggle.metalfx" = "MetalFX Upscaling";

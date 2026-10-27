@@ -6,11 +6,11 @@
 
 - 启动前设置 `DM_METALFX=spatial`；`off` 或未设置时继续常规呈现。
 - `mtl_set_metalfx(int)` 可切换呈现路径，但不会改变游戏渲染尺寸或相机。
-- 游戏/前端负责实际的原生宽屏几何和渲染分辨率，例如 `DM_GAME_RES=1568x720`。后端不修改游戏 shader、c1、原始链 `87c50a868147`、相机投影或 NVN render target 尺寸。
+- 游戏/前端负责实际的原生宽屏几何和渲染分辨率，例如 `DM_GAME_RES=1920x720`。后端不修改游戏 shader、c1、原始链 `87c50a868147`、相机投影或 NVN render target 尺寸。
 - 前端负责 `CAMetalLayer.drawableSize`。后端直接使用实际 drawable 尺寸，不硬编码 16:9 或 4K。2560×1176 是约 2K 宽屏输出的测试例，2048×940 也已验证；应根据实际屏幕比例计算尺寸。
 - macOS/iOS 目标必须链接 `MetalFX.framework`。当前 backend 使用 Metal 4 呈现队列，目标系统仍为 macOS/iOS 26。
 
-**`content=1568x720` 的 MetalFX 日志只证明 upscaler 输入区域是 720 高；它本身不能证明游戏的全部渲染目标已经降到 720p。** 实际分辨率、相机宽屏和性能还需要游戏路径与设备日志共同验收。
+**`content=1920x720` 的 MetalFX 日志只证明 upscaler 输入区域是 720 高；它本身不能证明游戏的全部渲染目标已经降到 720p。** 实际分辨率、相机宽屏和性能还需要游戏路径与设备日志共同验收。
 
 ## 图形实现
 

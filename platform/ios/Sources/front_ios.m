@@ -36,7 +36,7 @@ void front_ios_configure_display(int wide,int metalfx) { g_wide=!!wide;g_metalfx
 - (void)layoutSubviews {
     [super layoutSubviews];
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
-    l.drawableSize = g_metalfx?CGSizeMake(2560,g_wide?1176:1440):CGSizeMake(round(self.bounds.size.width*l.contentsScale),round(self.bounds.size.height*l.contentsScale));
+    l.drawableSize = g_metalfx?CGSizeMake(2560,g_wide?960:1440):CGSizeMake(round(self.bounds.size.width*l.contentsScale),round(self.bounds.size.height*l.contentsScale));
 }
 @end
 
@@ -66,8 +66,8 @@ void front_ios_configure_display(int wide,int metalfx) { g_wide=!!wide;g_metalfx
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
     CGFloat w = b.size.width, h = b.size.height;
-    CGFloat aspect=g_wide?1568.0/720.0:16.0/9.0;
-    // Fill the matching Air panel; preserve geometry on differently shaped iPads.
+    CGFloat aspect=g_wide?1920.0/720.0:16.0/9.0;
+    // Center at the profile aspect; panels with another shape are letterboxed.
     if(!g_wide || fabs(w/h/aspect-1.0)>=0.01) {
         if(w/h>aspect)w=h*aspect;else h=w/aspect;
     }
@@ -82,7 +82,7 @@ void front_ios_configure_display(int wide,int metalfx) { g_wide=!!wide;g_metalfx
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
-uint64_t front_game_res(int docked) { return g_wide?(720ull<<32|1568):docked?(900ull<<32|1600):(720ull<<32|1280); }
+uint64_t front_game_res(int docked) { return g_wide?(720ull<<32|1920):docked?(900ull<<32|1600):(720ull<<32|1280); }
 void front_run(void (*guest)(void)) { guest(); }   // Already on main.m's big-stack thread
 
 // Software keyboard: show a UIAlertController on the main thread, the calling thread waits for the result

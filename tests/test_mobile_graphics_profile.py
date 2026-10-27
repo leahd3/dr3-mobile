@@ -28,7 +28,7 @@ class MobileGraphicsProfile(unittest.TestCase):
 
     def test_changes_are_limited_and_original_is_immutable(self):
         source=self.source();before=bytes(source)
-        for width in (1280,1560,1568,1600,1920):
+        for width in (1280,1560,1600,1912,1920):
             result=m.configure(source,width,720);restored=bytearray(result)
             for offset,old,_,_ in m.sites(width,720):struct.pack_into('<I',restored,offset,old)
             self.assertEqual(restored,source)
@@ -47,13 +47,13 @@ class MobileGraphicsProfile(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'guard failed'):m.configure(m.configure(original))
 
     def test_bounds_do_not_allow_unknown_dimensions(self):
-        for w,h in ((1272,720),(1928,720),(1569,720),(1568,900),(1568,719),(True,720),(1568,720.0)):
+        for w,h in ((1272,720),(1928,720),(1569,720),(1920,900),(1920,719),(True,720),(1920,720.0)):
             with self.assertRaises(ValueError):m.parameters(w,h)
 
     def test_independent_guest_math(self):
         llvm=m.llvm_mc()
         if not llvm.exists():self.skipTest('LLVM unavailable')
-        for width in (1280,1568,1920):
+        for width in (1280,1600,1920):
             report=m.verify(self.source(),llvm,width,720)
             self.assertTrue(report['passed'])
             self.assertEqual(report['unicorn_perspective_pairs'],64)

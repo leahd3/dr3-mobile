@@ -18,7 +18,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / 'config/diablo3-2.7.7.json'
-DEFAULT_WIDTH, DEFAULT_HEIGHT = 1568, 720
+DEFAULT_WIDTH, DEFAULT_HEIGHT = 1920, 720
 SUFFIXES=('patched.bin','fixups.tsv','gates.tsv','sites.tsv','cuts.tsv','obs.tsv','params.tsv')
 SITES = (
     (0xe7858, 0xd280c808, 'docked render width'),

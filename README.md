@@ -23,7 +23,7 @@ As of **2026-10-18**. Research preview, not complete-game compatibility.
 | Local Wi-Fi | Mac host → iPhone client joined the same party; user confirmed both characters visible. Long sessions, combat/drop/scene synchronization, four players and reverse hosting remain unverified |
 | Public Internet / Mesh | Design contract only; no released Mesh integration or Battle.net services |
 
-The launcher offers Metal HUD, MetalFX Spatial, normal/wide view and local Wi-Fi options. The tested wide profile renders at 1568×720; mobile MetalFX targets approximately 2K while preserving aspect. macOS and iOS use separate shader builds. Frame rate varies with device and scene; this is not a guarantee of sustained 60 FPS.
+The launcher offers Metal HUD, MetalFX Spatial, normal/wide view and local Wi-Fi options. The wide profile renders at 1920×720; mobile MetalFX targets approximately 2K while preserving aspect. macOS and iOS use separate shader builds. Frame rate varies with device and scene; this is not a guarantee of sustained 60 FPS.
 
 Constant-update forwarding substantially improved the observed Mac scene performance, but the original lantern flicker reproduced when forwarding was enabled. Attachment-dependency guards retain the optimization; the original location still needs dynamic visual acceptance. Full chapters, sustained thermal behavior, every rendering path and extended multiplayer stability are pending. See [status](STATUS.md), [acceptance checklist](docs/COMPLETION_CHECKLIST.md), [rendering notes](docs/LANTERN_STABILITY.md) and [LAN scope](docs/LAN_MULTIPLAYER.md).
 

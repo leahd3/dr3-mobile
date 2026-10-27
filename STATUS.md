@@ -16,7 +16,7 @@ Current LAN result (2026-10-18):
 
 Latest configuration/LAN integration:
 - D2R Mobile fast-forwarded from 21cf97b to 9393b00 (v1.0.18); three existing local modified files preserved byte-for-byte. Generic MIT touch joystick/socket artwork copied with provenance, original D3 bindings retained.
-- Native iOS launch menu selects HUD, MetalFX, wide/normal and Wi-Fi LAN before guest preload. Real camera/UI wide profile 1568×720 is embedded as signed code alongside original; MetalFX output is 2560×1176 for Air or 2560×1440 for normal. Differently shaped iPads preserve picture aspect.
+- Native iOS launch menu selects HUD, MetalFX, wide/normal and Wi-Fi LAN before guest preload. Real camera/UI wide profile 1920×720 is embedded as signed code alongside original; MetalFX output is 2560×960 for Air or 2560×1440 for normal. Differently shaped iPads preserve picture aspect.
 - Complete `make test` and Mac/iPhoneOS builds passed; actual MetalFX GPU fixture passed 336 channel checks. Four opt-in LAN ASan/UBSan tests include actual Bonjour discovery, UDP/TCP and lifecycle boundaries. These are separate from actual multiplayer gameplay acceptance.
 - Candidate Mac app: `work/macapp-lan-metalfx/DR3 Mobile.app`. Signed iOS SHA: ac59ec201249df26df12c5b72c2a25758dbbad6e7d6458a313245e09577a457f, developer team, both memory entitlements verified. Current install/session status is in `work/run/ios-launch-settings-20261018/` and `work/ios-device-session.json`.
 - User confirmed old iPhone build reached town with working touch and audible sound. Original Mac save remains unchanged. User saved to title before authorizing this update; device save and original app separately backed up.

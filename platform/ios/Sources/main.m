@@ -27,7 +27,7 @@ static NSDictionary *graphics_profile(void) {
 static BOOL wide_available(void) {
     NSDictionary *profile=graphics_profile(),*p=profile[@"parameters"];
     return [profile[@"startup_selection"] boolValue] && [profile[@"mode"] isEqual:@"d3-mobile-graphics"] &&
-           [p[@"width"] intValue]==1568 && [p[@"height"] intValue]==720;
+           [p[@"width"] intValue]==1920 && [p[@"height"] intValue]==720;
 }
 
 #include "../../../native/asset_inventory.h"
@@ -119,7 +119,7 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
     setenv("MTL_HUD_ENABLED",hud?"1":"0",1);
     setenv("DM_METALFX",metalfx?"spatial":"off",1);
     setenv("DM_IOS_GRAPHICS_MODE",wide?"wide":"normal",1);
-    setenv("DM_GAME_RES",wide?"1568x720":"1280x720",1);
+    setenv("DM_GAME_RES",wide?"1920x720":"1280x720",1);
     setenv("DM_DR3_LAN",lan?"1":"0",1);
     fprintf(stderr,"boot: launch mode=%s render=%s HUD=%d MetalFX=%s LAN=%d\n",wide?"wide":"normal",getenv("DM_GAME_RES"),hud,metalfx?"spatial":"off",lan);
     front_ios_configure_display(wide,metalfx);
